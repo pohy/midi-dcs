@@ -1,16 +1,20 @@
-"""Map MIDI CC sliders to vJoy axes, configured in an ini file."""
+"""Map MIDI CC sliders and notes to vJoy axes/buttons and DCS-BIOS controls, configured in an ini file."""
 import argparse
 import configparser
 import ctypes
+import json
 import math
+import socket
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import mido
 
-# ponytail: hardcoded default install path, add a config key if vJoy lives elsewhere
+# ponytail: hardcoded default install paths, add config keys if vJoy or Saved Games live elsewhere
 VJOY_DLL = r"C:\Program Files\vJoy\x64\vJoyInterface.dll"
+DCSBIOS_JSON = Path.home() / "Saved Games/DCS/Scripts/DCS-BIOS/doc/json"
+DCSBIOS_ADDR = ("127.0.0.1", 7778)  # DCS-BIOS UDP import port
 AXES = {"x": 0x30, "y": 0x31, "z": 0x32, "rx": 0x33, "ry": 0x34, "rz": 0x35, "sl0": 0x36, "sl1": 0x37}  # HID usages
 VJD_STATUS = {0: "owned by this process", 2: "busy (another feeder owns it)", 3: "missing (not configured)"}
 TICK_S = 0.001  # output loop period
@@ -19,6 +23,11 @@ TICK_S = 0.001  # output loop period
 def cc_to_axis(value):
     """MIDI 0..127 -> vJoy 1..32768."""
     return 1 + value * 0x7FFF // 127
+
+
+def cc_to_state(value, max_value):
+    """MIDI 0..127 -> DCS-BIOS set_state 0..max_value in equal zones; 127 hits max_value exactly."""
+    return min(value * (max_value + 1) // 127, max_value)
 
 
 def smooth(prev, raw, dt, tau):
@@ -54,7 +63,38 @@ def in_range(value, lo, hi, what):
     return value
 
 
-def load_config(path):
+def parse_source(src, where):
+    """'note N' / 'cc N' -> ("note"|"cc", N)."""
+    kind, _, num = src.lower().partition(" ")
+    if kind not in ("note", "cc") or not num.strip().isdigit():
+        raise SystemExit(f"{where} must be 'note N' or 'cc N', got '{src}'")
+    return kind, in_range(int(num), 0, 127, where)
+
+
+def load_dcsbios(cfg, section, json_dir):
+    """[dcsbios:AIRCRAFT] IDENTIFIER = cc N -> {IDENTIFIER: (cc, max_value)}, checked against the aircraft json."""
+    aircraft = section.partition(":")[2]
+    try:
+        doc = json.loads((Path(json_dir) / f"{aircraft}.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise SystemExit(f"[{section}] no DCS-BIOS json for '{aircraft}' in {json_dir}")
+    controls = {c["identifier"].upper(): c for cat in doc.values() for c in cat.values()}
+    mapping = {}
+    for ident, src in cfg.items(section):
+        c = controls.get(ident.upper())
+        if c is None:
+            raise SystemExit(f"[{section}] unknown control '{ident}', look it up in Bort")
+        kind, cc = parse_source(src, f"[{section}] {ident}")
+        if kind != "cc":
+            raise SystemExit(f"[{section}] {ident}: only 'cc N' supported, got '{src}'")
+        max_value = next((i["max_value"] for i in c["inputs"] if i["interface"] == "set_state"), None)
+        if max_value is None:
+            raise SystemExit(f"[{section}] {ident} has no set_state input, can't follow a cc")
+        mapping[c["identifier"]] = (cc, max_value)
+    return mapping
+
+
+def load_config(path, json_dir=DCSBIOS_JSON):
     """Read the ini file, exit with a readable message on any problem."""
     cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"), interpolation=None)
     try:
@@ -67,10 +107,11 @@ def load_config(path):
             axes[name] = in_range(int(cc), 0, 127, f"[axes] {name}")
         buttons = {}
         for btn, src in cfg.items("buttons") if cfg.has_section("buttons") else []:
-            kind, _, num = src.lower().partition(" ")
-            if kind not in ("note", "cc") or not num.strip().isdigit():
-                raise SystemExit(f"{path}: [buttons] {btn} must be 'note N' or 'cc N', got '{src}'")
-            buttons[in_range(int(btn), 1, 128, "[buttons] button")] = (kind, in_range(int(num), 0, 127, f"[buttons] {btn}"))
+            buttons[in_range(int(btn), 1, 128, "[buttons] button")] = parse_source(src, f"[buttons] {btn}")
+        # ponytail: one aircraft; several sections need aircraft detection from the DCS-BIOS export stream
+        dcs = [s for s in cfg.sections() if s.startswith("dcsbios:")]
+        if len(dcs) > 1:
+            raise SystemExit(f"{path}: only one [dcsbios:AIRCRAFT] section supported, got {', '.join(dcs)}")
         return SimpleNamespace(
             port=cfg.get("midi", "port", fallback=None) or None,
             channel=in_range(cfg.getint("midi", "channel", fallback=None), 1, 16, "[midi] channel"),
@@ -78,6 +119,7 @@ def load_config(path):
             smooth=cfg.getfloat("vjoy", "smooth", fallback=0.05),
             axes=axes,
             buttons=buttons,
+            dcsbios=load_dcsbios(cfg, dcs[0], json_dir) if dcs else {},
         )
     except (configparser.Error, ValueError) as e:
         raise SystemExit(f"{path}: {e}")
@@ -107,25 +149,28 @@ def main():
                    help="config file (default: midi_joy.ini next to this script)")
     p.add_argument("--list", action="store_true", help="list MIDI input ports and exit")
     p.add_argument("--monitor", action="store_true",
-                   help="print incoming MIDI from the configured port in config syntax, no vJoy")
+                   help="print incoming MIDI from the configured port in config syntax, no vJoy or DCS-BIOS")
     args = p.parse_args()
 
     if args.list:
         print("\n".join(mido.get_input_names()) or "no MIDI input ports")
         return
     conf = load_config(args.config)
-    if not args.monitor and not conf.axes and not conf.buttons:
-        raise SystemExit(f"{args.config}: nothing mapped in [axes] or [buttons]")
+    if not args.monitor and not conf.axes and not conf.buttons and not conf.dcsbios:
+        raise SystemExit(f"{args.config}: nothing mapped in [axes], [buttons] or [dcsbios:AIRCRAFT]")
 
     vj = None
     # latest state per output, written by the MIDI callback thread; only the main loop talks to vJoy
     target = dict.fromkeys(conf.axes)
     btn_target = dict.fromkeys(conf.buttons)
+    dcs_sent = {}
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     if args.monitor:
         def callback(msg):
             print(describe(msg))
     else:
-        vj = open_vjoy(conf.device, conf.axes, conf.buttons)
+        if conf.axes or conf.buttons:
+            vj = open_vjoy(conf.device, conf.axes, conf.buttons)
 
         def callback(msg):
             ev = button_event(msg)
@@ -138,6 +183,15 @@ def main():
             for btn, s in conf.buttons.items():
                 if src == s:
                     btn_target[btn] = pressed
+            # DCS-BIOS is plain UDP, safe to send straight from here
+            for ident, (cc, max_value) in conf.dcsbios.items():
+                if src == ("cc", cc):
+                    state = cc_to_state(msg.value, max_value)
+                    # ponytail: dedup per zone, so after moving the switch with the mouse
+                    # the knob only resyncs once it enters another zone
+                    if dcs_sent.get(ident) != state:
+                        dcs_sent[ident] = state
+                        sock.sendto(f"{ident} {state}\n".encode(), DCSBIOS_ADDR)
 
     # rtmidi appends a shifting index to port names ("MIDI Mix 3"), so match substrings
     port_name = next((n for n in mido.get_input_names() if conf.port and conf.port in n), conf.port)
@@ -146,7 +200,8 @@ def main():
     try:
         with mido.open_input(port_name, callback=callback) as port:
             mapping = " ".join([f"{n}=cc{c}" for n, c in conf.axes.items()]
-                               + [f"btn{b}={k}{n}" for b, (k, n) in conf.buttons.items()])
+                               + [f"btn{b}={k}{n}" for b, (k, n) in conf.buttons.items()]
+                               + [f"{i}=cc{c}" for i, (c, _) in conf.dcsbios.items()])
             print(f"listening on '{port.name}' ({mapping}), Ctrl+C to quit")
             pos = dict.fromkeys(conf.axes)
             sent = dict.fromkeys(conf.axes)

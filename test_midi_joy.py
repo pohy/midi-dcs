@@ -1,15 +1,31 @@
+import json
 import math
 import tempfile
 from pathlib import Path
 
 import mido
 
-from midi_joy import button_event, cc_to_axis, describe, load_config, smooth
+from midi_joy import (
+    button_event,
+    cc_to_axis,
+    cc_to_state,
+    describe,
+    load_config,
+    smooth,
+)
 
 
 def test_cc_to_axis():
     assert cc_to_axis(0) == 1
     assert cc_to_axis(127) == 0x8000
+
+
+def test_cc_to_state():
+    assert [cc_to_state(v, 7) for v in (0, 15, 16, 111, 112, 127)] == [0, 0, 1, 6, 7, 7]
+    zones = [cc_to_state(v, 4) for v in range(128)]
+    assert sorted(set(zones)) == [0, 1, 2, 3, 4]
+    assert max(map(zones.count, set(zones))) - min(map(zones.count, set(zones))) <= 1  # equal zones
+    assert cc_to_state(0, 65535) == 0 and cc_to_state(127, 65535) == 65535  # dials reach full range
 
 
 def test_smooth():
@@ -19,11 +35,22 @@ def test_smooth():
     assert math.isclose(smooth(smooth(0.0, 100, 0.01, 0.05), 100, 0.01, 0.05), smooth(0.0, 100, 0.02, 0.05))
 
 
+# trimmed copy of DCS-BIOS F-16C_50.json entries
+FAKE_JSON = {"External Lights": {
+    "ANTI_COLL_LIGHT_KNB": {"identifier": "ANTI_COLL_LIGHT_KNB", "inputs": [
+        {"interface": "fixed_step"}, {"interface": "set_state", "max_value": 7}]},
+    "FORM_LIGHT_KNB": {"identifier": "FORM_LIGHT_KNB", "inputs": [
+        {"interface": "set_state", "max_value": 65535}, {"interface": "variable_step", "max_value": 65535}]},
+    "ALT_BARO_SET_KNB": {"identifier": "ALT_BARO_SET_KNB", "inputs": [{"interface": "variable_step"}]},
+}}
+
+
 def _load(text):
     with tempfile.TemporaryDirectory() as d:
         path = Path(d, "c.ini")
         path.write_text(text)
-        return load_config(path)
+        Path(d, "F-16C_50.json").write_text(json.dumps(FAKE_JSON))
+        return load_config(path, json_dir=d)
 
 
 def test_button_event_and_describe():
@@ -56,6 +83,7 @@ def test_load_config():
 
 if __name__ == "__main__":
     test_cc_to_axis()
+    test_cc_to_state()
     test_smooth()
     test_button_event_and_describe()
     test_load_config()
