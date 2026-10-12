@@ -31,7 +31,7 @@ class Output(Protocol):
 class Config:
     midi: midi.MidiConfig
     vjoy: vjoy.VJoyConfig
-    dcsbios: dict[str, dcsbios.DcsControl]
+    dcsbios: dcsbios.DcsConfig
 
 
 def load_config(path: Path, json_dir: Path = dcsbios.JSON_DIR) -> Config:
@@ -49,8 +49,14 @@ def open_outputs(conf: Config) -> list[Output]:
     outputs: list[Output] = []
     if conf.vjoy.axes or conf.vjoy.buttons:
         outputs.append(vjoy.VJoy(conf.vjoy, vjoy.acquire(conf.vjoy)))
-    if conf.dcsbios:
-        outputs.append(dcsbios.DcsBios(conf.dcsbios))
+    if conf.dcsbios.knobs:
+        outputs.append(dcsbios.DcsBios(conf.dcsbios.knobs))
+    if conf.dcsbios.switches:
+        if conf.midi.port is None:
+            raise SystemExit("[midi] port needed for switch LEDs, the default MIDI output is usually a synth")
+        leds = mido.open_output(midi.find_port(conf.midi.port, mido.get_output_names()))
+        channel = (conf.midi.channel or 1) - 1
+        outputs.append(dcsbios.DcsSwitches(conf.dcsbios.switches, leds, channel, dcsbios.listen()))
     return outputs
 
 
@@ -72,7 +78,7 @@ def run(port: str | None, callback: Callable[[mido.Message], None], outputs: lis
     # py3.10 sleep() has ~15.6 ms granularity without this; reset by Windows on process exit
     ctypes.windll.winmm.timeBeginPeriod(1)
     try:
-        with mido.open_input(midi.find_input(port), callback=callback) as midi_in:
+        with mido.open_input(midi.find_port(port, mido.get_input_names()), callback=callback) as midi_in:
             print(f"listening on '{midi_in.name}' ({mapping}), Ctrl+C to quit")
             last = time.perf_counter()
             while True:

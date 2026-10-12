@@ -62,9 +62,8 @@ def describe(msg: mido.Message) -> str:
     return f"ch{msg.channel + 1} {kind} {num} {state}"
 
 
-def find_input(port: str | None) -> str | None:
+def find_port(port: str | None, names: list[str]) -> str | None:
     """rtmidi appends a shifting index to port names ("MIDI Mix 3"), so match substrings."""
     if port is None:
         return None
-    names: list[str] = mido.get_input_names()
     return next((n for n in names if port in n), port)
