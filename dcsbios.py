@@ -3,6 +3,7 @@ to 5 positions, with the switch state read back from the export stream onto the 
 import json
 import socket
 import struct
+from collections.abc import Callable
 from configparser import ConfigParser
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,8 @@ LED_STEP_S = 0.125  # time per pattern character
 # LED per switch position, counted down from the top: solid, dark, slow blink, fast blink, double flash.
 # Top on and the one below dark gives ON/OFF on 2-position switches and a dark OFF in the middle of 3-position ones.
 PATTERNS = ("11111111", "00000000", "11110000", "10101010", "10100000")
+# knob clicks only up to here, 2+ CC steps per position; dials (65535) would click on every CC step
+CLICK_MAX_VALUE = 63
 
 
 class _Input(TypedDict, total=False):  # py3.10 has no NotRequired; only max_value is really optional
@@ -156,8 +159,9 @@ def listen() -> socket.socket:
 class DcsBios:
     """Plain UDP, so commands go out straight from the MIDI thread."""
 
-    def __init__(self, controls: dict[str, DcsControl]) -> None:
+    def __init__(self, controls: dict[str, DcsControl], click: Callable[[], None] = lambda: None) -> None:
         self.controls = controls
+        self.click = click  # on every new position of a switch, not of a dial
         self.sent: dict[str, int] = {}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -172,6 +176,9 @@ class DcsBios:
                 continue
             self.sent[ident] = state
             self.sock.sendto(f"{ident} {state}\n".encode(), ADDR)
+            # also clicks on the first move after start, even if DCS already sits in that position
+            if max_value <= CLICK_MAX_VALUE:
+                self.click()
 
     def tick(self, dt: float) -> None:
         """Commands go out from on_midi, nothing to do per tick."""

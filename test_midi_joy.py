@@ -1,8 +1,10 @@
 import ctypes
+import io
 import json
 import math
 import socket
 import tempfile
+import wave
 from pathlib import Path
 from typing import cast
 
@@ -21,6 +23,7 @@ from dcsbios import (
 )
 from midi import MidiEvent, describe, midi_event
 from midi_joy import Config, dispatch, load_config
+from sound import SoundConfig
 from vjoy import VJoy, VJoyConfig, cc_to_axis, smooth
 
 
@@ -93,6 +96,7 @@ def test_load_config() -> None:
     assert c.vjoy.axes == {"x": 19, "rz": 23}
     assert c.vjoy.buttons == {1: ("note", 1), 12: ("cc", 64)}
     assert c.dcsbios == DcsConfig({}, {})
+    assert c.sound == SoundConfig(())  # silent without [sound]
     assert _load("[midi]\n").vjoy.axes == {}  # sections optional; main() rejects an empty mapping
     _rejects("[axes]\nfoo = 1\n", "[axes]\nz = 128\n", "[axes]\nz = abc\n", "[midi]\nchannel = 17\n",
              "[buttons]\n1 = foo 3\n", "[buttons]\n1 = note\n", "[buttons]\n0 = note 1\n",
@@ -172,7 +176,9 @@ class _FakeSock:
 
 
 def test_dcsbios_sends_once_per_zone() -> None:
-    d = DcsBios({"ANTI_COLL_LIGHT_KNB": DcsControl(17, 7)})
+    clicks: list[None] = []
+    d = DcsBios({"ANTI_COLL_LIGHT_KNB": DcsControl(17, 7), "FORM_LIGHT_KNB": DcsControl(19, 65535)},
+                lambda: clicks.append(None))
     d.close()
     sock = _FakeSock()
     d.sock = cast(socket.socket, sock)
@@ -180,6 +186,30 @@ def test_dcsbios_sends_once_per_zone() -> None:
         d.on_midi(MidiEvent(("cc", 17), value, False))
     d.on_midi(MidiEvent(("cc", 18), 127, True))  # unmapped
     assert sock.sent == [b"ANTI_COLL_LIGHT_KNB 0\n", b"ANTI_COLL_LIGHT_KNB 1\n"]
+    assert len(clicks) == 2  # one per position
+    d.on_midi(MidiEvent(("cc", 19), 64, False))
+    assert len(sock.sent) == 3 and len(clicks) == 2  # dials don't click
+
+
+def _wav(path: Path, samples: list[int], sampwidth: int = 2) -> None:
+    with wave.open(str(path), "wb") as w:
+        w.setparams((1, sampwidth, 44100, 0, "NONE", "not compressed"))
+        w.writeframes(b"".join(s.to_bytes(sampwidth, "little", signed=True) for s in samples))
+
+
+def test_load_config_sound() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        _wav(Path(d, "a.wav"), [1000, -32768, 3])
+        _wav(Path(d, "b.wav"), [0])
+        c = _load(f"[sound]\nclick = {Path(d, 'a.wav')}\nvolume = 0.5\n")
+        with wave.open(io.BytesIO(c.sound.clicks[0])) as w:
+            assert (w.getnchannels(), w.getframerate()) == (1, 44100)
+            assert w.readframes(3) == b"".join(s.to_bytes(2, "little", signed=True) for s in (500, -16384, 1))
+        assert len(_load(f"[sound]\nclick = {d}\n").sound.clicks) == 2  # folder: every wav
+        _wav(Path(d, "8bit.wav"), [5], sampwidth=1)
+        _rejects(f"[sound]\nclick = {Path(d, '8bit.wav')}\n", f"[sound]\nclick = {Path(d, 'none.wav')}\n",
+                 f"[sound]\nclick = {Path(d, 'a.wav')}\nvolume = 1.5\n",
+                 "[sound]\nclick = .\n")  # folder without wavs
 
 
 def test_export() -> None:
@@ -294,6 +324,7 @@ if __name__ == "__main__":
     test_dispatch()
     test_vjoy_sends_changes_only()
     test_dcsbios_sends_once_per_zone()
+    test_load_config_sound()
     test_export()
     test_led_on()
     test_dcsbios_switches()

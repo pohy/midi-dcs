@@ -12,6 +12,7 @@ import mido
 
 import dcsbios
 import midi
+import sound
 import vjoy
 
 TICK_S = 0.001  # output loop period
@@ -32,6 +33,7 @@ class Config:
     midi: midi.MidiConfig
     vjoy: vjoy.VJoyConfig
     dcsbios: dcsbios.DcsConfig
+    sound: sound.SoundConfig
 
 
 def load_config(path: Path, json_dir: Path = dcsbios.JSON_DIR) -> Config:
@@ -40,7 +42,8 @@ def load_config(path: Path, json_dir: Path = dcsbios.JSON_DIR) -> Config:
     try:
         if not cfg.read(path, encoding="utf-8"):
             raise SystemExit(f"config not found: {path}")
-        return Config(midi=midi.parse(cfg), vjoy=vjoy.parse(cfg), dcsbios=dcsbios.parse(cfg, json_dir))
+        return Config(midi=midi.parse(cfg), vjoy=vjoy.parse(cfg), dcsbios=dcsbios.parse(cfg, json_dir),
+                      sound=sound.parse(cfg, path.parent))
     except (configparser.Error, ValueError) as e:
         raise SystemExit(f"{path}: {e}")
 
@@ -50,7 +53,8 @@ def open_outputs(conf: Config) -> list[Output]:
     if conf.vjoy.axes or conf.vjoy.buttons:
         outputs.append(vjoy.VJoy(conf.vjoy, vjoy.acquire(conf.vjoy)))
     if conf.dcsbios.knobs:
-        outputs.append(dcsbios.DcsBios(conf.dcsbios.knobs))
+        click = sound.Clicker(conf.sound).play if conf.sound.clicks else lambda: None
+        outputs.append(dcsbios.DcsBios(conf.dcsbios.knobs, click))
     if conf.dcsbios.switches:
         if conf.midi.port is None:
             raise SystemExit("[midi] port needed for switch LEDs, the default MIDI output is usually a synth")
