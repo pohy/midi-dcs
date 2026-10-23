@@ -18,11 +18,13 @@ from dcsbios import (
     DcsSwitches,
     apply_export,
     cc_to_state,
+    label,
     led_on,
     switch_state,
 )
 from midi import MidiEvent, describe, midi_event
 from midi_joy import Config, dispatch, load_config
+from overlay import OverlayConfig, place
 from sound import SoundConfig
 from vjoy import VJoy, VJoyConfig, cc_to_axis, smooth
 
@@ -49,13 +51,16 @@ def test_smooth() -> None:
 
 # trimmed copy of DCS-BIOS F-16C_50.json entries
 FAKE_JSON = {"External Lights": {
-    "ANTI_COLL_LIGHT_KNB": {"identifier": "ANTI_COLL_LIGHT_KNB", "inputs": [
-        {"interface": "fixed_step"}, {"interface": "set_state", "max_value": 7}]},
+    "ANTI_COLL_LIGHT_KNB": {"identifier": "ANTI_COLL_LIGHT_KNB", "description": "ANTI-COLL Knob", "inputs": [
+        {"interface": "fixed_step"}, {"interface": "set_state", "max_value": 7}],
+        "positions": ["OFF", "1", "2", "3", "4", "A", "B", "C"]},
     "FORM_LIGHT_KNB": {"identifier": "FORM_LIGHT_KNB", "inputs": [
         {"interface": "set_state", "max_value": 65535}, {"interface": "variable_step", "max_value": 65535}]},
     "ALT_BARO_SET_KNB": {"identifier": "ALT_BARO_SET_KNB", "inputs": [{"interface": "variable_step"}]},
-    "AP_PITCH_SW": {"identifier": "AP_PITCH_SW", "inputs": [{"interface": "set_state", "max_value": 2}], "outputs": [
-        {"address": 17408, "mask": 768, "max_value": 2, "shift_by": 8, "type": "integer"}]},
+    "AP_PITCH_SW": {"identifier": "AP_PITCH_SW", "description": "Autopilot PITCH Switch", "inputs": [
+        {"interface": "set_state", "max_value": 2}], "outputs": [
+        {"address": 17408, "mask": 768, "max_value": 2, "shift_by": 8, "type": "integer"}],
+        "positions": ["ATT HOLD", "A/P OFF", "ALT HOLD"]},
     "LASER_ARM_SW": {"identifier": "LASER_ARM_SW", "inputs": [{"interface": "set_state", "max_value": 1}], "outputs": [
         {"address": 17448, "mask": 8, "max_value": 1, "shift_by": 3, "type": "integer"}]},
 }}
@@ -97,6 +102,7 @@ def test_load_config() -> None:
     assert c.vjoy.buttons == {1: ("note", 1), 12: ("cc", 64)}
     assert c.dcsbios == DcsConfig({}, {})
     assert c.sound == SoundConfig(())  # silent without [sound]
+    assert c.overlay is None  # off without [overlay]
     assert _load("[midi]\n").vjoy.axes == {}  # sections optional; main() rejects an empty mapping
     _rejects("[axes]\nfoo = 1\n", "[axes]\nz = 128\n", "[axes]\nz = abc\n", "[midi]\nchannel = 17\n",
              "[buttons]\n1 = foo 3\n", "[buttons]\n1 = note\n", "[buttons]\n0 = note 1\n",
@@ -106,13 +112,36 @@ def test_load_config() -> None:
 def test_load_config_dcsbios() -> None:
     c = _load("[dcsbios:F-16C_50]\nanti_coll_light_knb = cc 17\nFORM_LIGHT_KNB = cc 18\nap_pitch_sw = note 19\n"
               "laser_arm_sw = note 18\n")
-    assert c.dcsbios.knobs == {"ANTI_COLL_LIGHT_KNB": (17, 7), "FORM_LIGHT_KNB": (18, 65535)}
-    assert c.dcsbios.switches == {"AP_PITCH_SW": (19, 2, 17408, 768, 8), "LASER_ARM_SW": (18, 1, 17448, 8, 3)}
+    assert c.dcsbios.knobs == {
+        "ANTI_COLL_LIGHT_KNB": (17, 7, "ANTI-COLL Knob", ("OFF", "1", "2", "3", "4", "A", "B", "C")),
+        "FORM_LIGHT_KNB": (18, 65535, "FORM_LIGHT_KNB", ())}  # no description: identifier
+    assert c.dcsbios.switches == {
+        "AP_PITCH_SW": (19, 2, 17408, 768, 8, "Autopilot PITCH Switch", ("ATT HOLD", "A/P OFF", "ALT HOLD")),
+        "LASER_ARM_SW": (18, 1, 17448, 8, 3, "LASER_ARM_SW", ())}
     _rejects("[dcsbios:F-16C_50]\nFOO = cc 1\n",  # unknown control
              "[dcsbios:F-16C_50]\nANTI_COLL_LIGHT_KNB = note 1\n",  # 8 positions, notes cycle up to 5
              "[dcsbios:F-16C_50]\nALT_BARO_SET_KNB = cc 1\n",  # no set_state input
              "[dcsbios:A-10C]\nFOO = cc 1\n",  # no json
              "[dcsbios:F-16C_50]\n[dcsbios:A-10C]\n")  # two aircraft
+
+
+def test_label() -> None:
+    assert label(DcsControl(17, 7, "ANTI-COLL Knob", tuple("O1234ABC")), 6) == "ANTI-COLL Knob  B"
+    assert label(DcsSwitch(19, 2, 0, 0, 0, "PITCH", ()), 1) == "PITCH  1/2"  # no position names
+    assert label(DcsSwitch(19, 2, 0, 0, 0, "PITCH", ("UP", "DOWN")), 1) == "PITCH  1/2"  # names don't fit
+    assert label(DcsControl(18, 65535, "FORM", ()), 32767) == "FORM  49%"  # dial
+
+
+def test_load_config_overlay() -> None:
+    assert _load("[overlay]\n").overlay == OverlayConfig("N", 0, 0, 1.5)
+    c = _load("[overlay]\nposition = sw\noffset_x = 20\noffset_y = -20\ntimeout_s = 3\n").overlay
+    assert c == OverlayConfig("SW", 20, -20, 3.0)
+    _rejects("[overlay]\nposition = top\n", "[overlay]\ntimeout_s = 0\n", "[overlay]\noffset_x = 1.5\n")
+    screen, box = (1920, 1080), (200, 50)
+    assert place(OverlayConfig("N", 0, 60, 1), screen, box) == (860, 60)
+    assert place(OverlayConfig("SW", 20, -20, 1), screen, box) == (20, 1010)
+    assert place(OverlayConfig("SE", 0, 0, 1), screen, box) == (1720, 1030)
+    assert place(OverlayConfig("C", 0, 0, 1), screen, box) == (860, 515)
 
 
 class _Recorder:
@@ -177,8 +206,10 @@ class _FakeSock:
 
 def test_dcsbios_sends_once_per_zone() -> None:
     clicks: list[None] = []
-    d = DcsBios({"ANTI_COLL_LIGHT_KNB": DcsControl(17, 7), "FORM_LIGHT_KNB": DcsControl(19, 65535)},
-                lambda: clicks.append(None))
+    shown: list[str] = []
+    d = DcsBios({"ANTI_COLL_LIGHT_KNB": DcsControl(17, 7, "ANTI-COLL", ()),
+                 "FORM_LIGHT_KNB": DcsControl(19, 65535, "FORM", ())},
+                lambda: clicks.append(None), shown.append)
     d.close()
     sock = _FakeSock()
     d.sock = cast(socket.socket, sock)
@@ -189,6 +220,7 @@ def test_dcsbios_sends_once_per_zone() -> None:
     assert len(clicks) == 2  # one per position
     d.on_midi(MidiEvent(("cc", 19), 64, False))
     assert len(sock.sent) == 3 and len(clicks) == 2  # dials don't click
+    assert shown == ["ANTI-COLL  0/7", "ANTI-COLL  1/7", "FORM  50%"]  # one per command sent
 
 
 def _wav(path: Path, samples: list[int], sampwidth: int = 2) -> None:
@@ -214,8 +246,8 @@ def test_load_config_sound() -> None:
 
 def test_export() -> None:
     mem = bytearray(0x10000)
-    pitch = DcsSwitch(19, 2, 0x4400, 0x300, 8)
-    roll = DcsSwitch(21, 2, 0x4400, 0xC00, 10)
+    pitch = DcsSwitch(19, 2, 0x4400, 0x300, 8, "PITCH", ())
+    roll = DcsSwitch(21, 2, 0x4400, 0xC00, 10, "ROLL", ())
     # sync, then two blocks: pitch up + roll down at 0x4400, something else at 0x4402
     apply_export(mem, b"\x55\x55\x55\x55" + bytes.fromhex("0044 0200 0002") + bytes.fromhex("0244 0200 ffff"))
     assert (switch_state(mem, pitch), switch_state(mem, roll)) == (2, 0)
@@ -257,52 +289,62 @@ class _FakeLeds:
     def close(self) -> None: ...
 
 
-def _switches(**switches: DcsSwitch) -> tuple[DcsSwitches, _FakeExport, _FakeLeds, _FakeSock]:
-    export, leds, sock = _FakeExport(), _FakeLeds(), _FakeSock()
-    d = DcsSwitches(switches, cast(mido.ports.BaseOutput, leds), 0, cast(socket.socket, export))
+def _switches(**switches: DcsSwitch) -> tuple[DcsSwitches, _FakeExport, _FakeLeds, _FakeSock, list[str]]:
+    export, leds, sock, shown = _FakeExport(), _FakeLeds(), _FakeSock(), list[str]()
+    d = DcsSwitches(switches, cast(mido.ports.BaseOutput, leds), 0, cast(socket.socket, export), shown.append)
     d.sock.close()
     d.sock = cast(socket.socket, sock)
-    return d, export, leds, sock
+    return d, export, leds, sock, shown
 
 
 F16 = bytes.fromhex("0000 0800") + b"F-16C_50"  # export block setting the aircraft name
 
 
 def test_dcsbios_switches() -> None:
-    d, export, leds, sock = _switches(AP_PITCH_SW=DcsSwitch(19, 2, 0x4400, 0x300, 8))
+    d, export, leds, sock, shown = _switches(AP_PITCH_SW=DcsSwitch(19, 2, 0x4400, 0x300, 8, "PITCH", ("D", "M", "U")))
     press = MidiEvent(("note", 19), 127, True)
     d.tick(0.001)
     assert leds.sent == [(19, 0)]  # stale LED cleared before any DCS data
     d.on_midi(press)  # unknown state counts as mid
     d.on_midi(MidiEvent(("note", 19), 0, False))  # release ignored
+    d.tick(0.001)
     export.packets.append(F16 + bytes.fromhex("0044 0200 0002"))  # DCS: F-16, up
     d.tick(0.001)
+    for pos in "01", "00", "01":  # DCS: mid, down, mid
+        d.on_midi(press)
+        d.tick(0.001)
+        export.packets.append(bytes.fromhex("0044 0200 00" + pos))
+        d.tick(0.001)
     d.on_midi(press)
-    export.packets.append(bytes.fromhex("0044 0200 0000"))  # DCS: down
     d.tick(0.001)
-    d.tick(0.5)  # blink off
-    d.on_midi(press)
-    export.packets.append(bytes.fromhex("0044 0200 0001"))  # DCS: mid, e.g. autopilot dropped out
+    d.tick(1)  # no answer, e.g. autopilot refused to engage
+    export.packets.append(bytes.fromhex("0044 0200 0002"))  # moved up in DCS, long after the press
     d.tick(0.001)
-    d.on_midi(press)
-    assert sock.sent == [b"AP_PITCH_SW 2\n", b"AP_PITCH_SW 0\n", b"AP_PITCH_SW 1\n", b"AP_PITCH_SW 2\n"]
-    assert leds.sent == [(19, 0), (19, 127), (19, 0)]  # up on; down blinks on (unchanged), then off; mid off
+    # physical order, never down -> up or up -> down in one command
+    assert sock.sent == [b"AP_PITCH_SW 2\n", b"AP_PITCH_SW 1\n", b"AP_PITCH_SW 0\n", b"AP_PITCH_SW 1\n",
+                         b"AP_PITCH_SW 2\n"]
+    # what DCS reported after each press, the unchanged mid on the refused one; the late move didn't show
+    assert shown == ["DCS-BIOS connected  F-16C_50", "PITCH  U", "PITCH  M", "PITCH  D", "PITCH  M", "PITCH  M"]
+    assert leds.sent == [(19, 0), (19, 127), (19, 0), (19, 127), (19, 0), (19, 127)]  # down = slow blink, on
     d.close()
     assert leds.sent[-1] == (19, 0)
 
 
 def test_dcsbios_two_position_switch() -> None:
-    d, export, leds, sock = _switches(LASER_ARM_SW=DcsSwitch(18, 1, 0x4428, 0x8, 3))
+    d, export, leds, sock, shown = _switches(LASER_ARM_SW=DcsSwitch(18, 1, 0x4428, 0x8, 3, "LASER", ()))
     press = MidiEvent(("note", 18), 127, True)
     d.on_midi(press)  # unknown counts as off
-    export.packets.append(bytes.fromhex("2844 0200 0800"))  # DCS: armed, aircraft name not seen yet
     d.tick(0.001)
-    assert leds.sent == [(18, 0)]
+    export.packets.append(bytes.fromhex("2844 0200 0800"))  # DCS: armed, aircraft name not seen yet
+    d.tick(1.5)
+    assert leds.sent == [(18, 0)] and shown == []  # position still unknown when the watch ends
     export.packets.append(F16)  # name arrives
     d.tick(0.001)
     d.on_midi(press)
+    d.tick(0.001)
     assert sock.sent == [b"LASER_ARM_SW 1\n", b"LASER_ARM_SW 0\n"]
     assert leds.sent == [(18, 0), (18, 127)]
+    d.tick(1.5)  # DCS didn't disarm
     export.packets.append(bytes.fromhex("0000 0600") + b"NONE\0\0")  # spectating / dead
     d.tick(0.001)
     export.packets.append(F16)  # back in the cockpit, still armed
@@ -310,8 +352,26 @@ def test_dcsbios_two_position_switch() -> None:
     export.packets.append(bytes.fromhex("0000 0200 0000"))  # mission end: name cleared
     d.tick(0.001)
     d.on_midi(press)
+    d.tick(0.001)
     assert leds.sent == [(18, 0), (18, 127), (18, 0), (18, 127), (18, 0)]
     assert sock.sent[-1] == b"LASER_ARM_SW 1\n"  # position unknown again, first press goes to the top
+    on, off = "DCS-BIOS connected  F-16C_50", "DCS-BIOS disconnected"
+    assert shown == [on, "LASER  1/1", off, on, off]
+
+
+def test_dcsbios_export_timeout() -> None:
+    d, export, leds, _, shown = _switches(LASER_ARM_SW=DcsSwitch(18, 1, 0x4428, 0x8, 3, "LASER", ()))
+    export.packets.append(F16 + bytes.fromhex("2844 0200 0800"))  # DCS: F-16, armed
+    d.tick(0.001)
+    d.tick(2.9)
+    assert leds.sent == [(18, 127)] and len(shown) == 1  # quiet, but not long enough
+    d.tick(0.2)  # 3 s without export: DCS crashed, no mission end frame
+    assert leds.sent == [(18, 127), (18, 0)] and d.state["LASER_ARM_SW"] is None
+    d.tick(5)
+    export.packets.append(F16)  # DCS back, switch data not resent yet
+    d.tick(0.001)
+    assert d.state["LASER_ARM_SW"] == 0  # stale armed state forgotten
+    assert shown == ["DCS-BIOS connected  F-16C_50", "DCS-BIOS disconnected", "DCS-BIOS connected  F-16C_50"]
 
 
 if __name__ == "__main__":
@@ -321,6 +381,8 @@ if __name__ == "__main__":
     test_midi_event_and_describe()
     test_load_config()
     test_load_config_dcsbios()
+    test_label()
+    test_load_config_overlay()
     test_dispatch()
     test_vjoy_sends_changes_only()
     test_dcsbios_sends_once_per_zone()
@@ -329,4 +391,5 @@ if __name__ == "__main__":
     test_led_on()
     test_dcsbios_switches()
     test_dcsbios_two_position_switch()
+    test_dcsbios_export_timeout()
     print("ok")

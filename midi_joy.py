@@ -12,6 +12,7 @@ import mido
 
 import dcsbios
 import midi
+import overlay
 import sound
 import vjoy
 
@@ -34,6 +35,7 @@ class Config:
     vjoy: vjoy.VJoyConfig
     dcsbios: dcsbios.DcsConfig
     sound: sound.SoundConfig
+    overlay: overlay.OverlayConfig | None
 
 
 def load_config(path: Path, json_dir: Path = dcsbios.JSON_DIR) -> Config:
@@ -43,7 +45,7 @@ def load_config(path: Path, json_dir: Path = dcsbios.JSON_DIR) -> Config:
         if not cfg.read(path, encoding="utf-8"):
             raise SystemExit(f"config not found: {path}")
         return Config(midi=midi.parse(cfg), vjoy=vjoy.parse(cfg), dcsbios=dcsbios.parse(cfg, json_dir),
-                      sound=sound.parse(cfg, path.parent))
+                      sound=sound.parse(cfg, path.parent), overlay=overlay.parse(cfg))
     except (configparser.Error, ValueError) as e:
         raise SystemExit(f"{path}: {e}")
 
@@ -52,15 +54,20 @@ def open_outputs(conf: Config) -> list[Output]:
     outputs: list[Output] = []
     if conf.vjoy.axes or conf.vjoy.buttons:
         outputs.append(vjoy.VJoy(conf.vjoy, vjoy.acquire(conf.vjoy)))
+    show: Callable[[str], None] = lambda text: None
+    if conf.overlay and (conf.dcsbios.knobs or conf.dcsbios.switches):
+        box = overlay.Overlay(conf.overlay)
+        outputs.append(box)
+        show = box.show
     if conf.dcsbios.knobs:
         click = sound.Clicker(conf.sound).play if conf.sound.clicks else lambda: None
-        outputs.append(dcsbios.DcsBios(conf.dcsbios.knobs, click))
+        outputs.append(dcsbios.DcsBios(conf.dcsbios.knobs, click, show))
     if conf.dcsbios.switches:
         if conf.midi.port is None:
             raise SystemExit("[midi] port needed for switch LEDs, the default MIDI output is usually a synth")
         leds = mido.open_output(midi.find_port(conf.midi.port, mido.get_output_names()))
         channel = (conf.midi.channel or 1) - 1
-        outputs.append(dcsbios.DcsSwitches(conf.dcsbios.switches, leds, channel, dcsbios.listen()))
+        outputs.append(dcsbios.DcsSwitches(conf.dcsbios.switches, leds, channel, dcsbios.listen(), show))
     return outputs
 
 
