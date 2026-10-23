@@ -101,7 +101,7 @@ def test_load_config() -> None:
     assert c.vjoy.axes == {"x": 19, "rz": 23}
     assert c.vjoy.buttons == {1: ("note", 1), 12: ("cc", 64)}
     assert c.dcsbios == DcsConfig({}, {})
-    assert c.sound == SoundConfig(())  # silent without [sound]
+    assert c.sound == SoundConfig((), ())  # silent without [sound]
     assert c.overlay is None  # off without [overlay]
     assert _load("[midi]\n").vjoy.axes == {}  # sections optional; main() rejects an empty mapping
     _rejects("[axes]\nfoo = 1\n", "[axes]\nz = 128\n", "[axes]\nz = abc\n", "[midi]\nchannel = 17\n",
@@ -233,15 +233,20 @@ def test_load_config_sound() -> None:
     with tempfile.TemporaryDirectory() as d:
         _wav(Path(d, "a.wav"), [1000, -32768, 3])
         _wav(Path(d, "b.wav"), [0])
-        c = _load(f"[sound]\nclick = {Path(d, 'a.wav')}\nvolume = 0.5\n")
-        with wave.open(io.BytesIO(c.sound.clicks[0])) as w:
+        c = _load(f"[sound]\nknob = {Path(d, 'a.wav')}\nknob_volume = 0.5\n")
+        with wave.open(io.BytesIO(c.sound.knob[0])) as w:
             assert (w.getnchannels(), w.getframerate()) == (1, 44100)
             assert w.readframes(3) == b"".join(s.to_bytes(2, "little", signed=True) for s in (500, -16384, 1))
-        assert len(_load(f"[sound]\nclick = {d}\n").sound.clicks) == 2  # folder: every wav
+        assert c.sound.switch == ()
+        assert len(_load(f"[sound]\nswitch = {d}\n").sound.switch) == 2  # folder: every wav
+        _wav(Path(d, "24bit.wav"), [0x123456, -0x800000], sampwidth=3)
+        with wave.open(io.BytesIO(_load(f"[sound]\nswitch = {Path(d, '24bit.wav')}\n").sound.switch[0])) as w:
+            assert w.getsampwidth() == 2  # top two bytes kept
+            assert w.readframes(2) == b"".join(s.to_bytes(2, "little", signed=True) for s in (0x1234, -0x8000))
         _wav(Path(d, "8bit.wav"), [5], sampwidth=1)
-        _rejects(f"[sound]\nclick = {Path(d, '8bit.wav')}\n", f"[sound]\nclick = {Path(d, 'none.wav')}\n",
-                 f"[sound]\nclick = {Path(d, 'a.wav')}\nvolume = 1.5\n",
-                 "[sound]\nclick = .\n")  # folder without wavs
+        _rejects(f"[sound]\nknob = {Path(d, '8bit.wav')}\n", f"[sound]\nknob = {Path(d, 'none.wav')}\n",
+                 f"[sound]\nswitch = {Path(d, 'a.wav')}\nswitch_volume = 1.5\n",
+                 "[sound]\nknob = .\n")  # folder without wavs
 
 
 def test_export() -> None:
@@ -289,9 +294,11 @@ class _FakeLeds:
     def close(self) -> None: ...
 
 
-def _switches(**switches: DcsSwitch) -> tuple[DcsSwitches, _FakeExport, _FakeLeds, _FakeSock, list[str]]:
-    export, leds, sock, shown = _FakeExport(), _FakeLeds(), _FakeSock(), list[str]()
-    d = DcsSwitches(switches, cast(mido.ports.BaseOutput, leds), 0, cast(socket.socket, export), shown.append)
+def _switches(clicks: list[None] | None = None,
+              **switches: DcsSwitch) -> tuple[DcsSwitches, _FakeExport, _FakeLeds, _FakeSock, list[str]]:
+    export, leds, sock, shown, played = _FakeExport(), _FakeLeds(), _FakeSock(), list[str](), clicks
+    d = DcsSwitches(switches, cast(mido.ports.BaseOutput, leds), 0, cast(socket.socket, export), shown.append,
+                    lambda: played.append(None) if played is not None else None)
     d.sock.close()
     d.sock = cast(socket.socket, sock)
     return d, export, leds, sock, shown
@@ -301,7 +308,9 @@ F16 = bytes.fromhex("0000 0800") + b"F-16C_50"  # export block setting the aircr
 
 
 def test_dcsbios_switches() -> None:
-    d, export, leds, sock, shown = _switches(AP_PITCH_SW=DcsSwitch(19, 2, 0x4400, 0x300, 8, "PITCH", ("D", "M", "U")))
+    clicks: list[None] = []
+    d, export, leds, sock, shown = _switches(clicks,
+                                             AP_PITCH_SW=DcsSwitch(19, 2, 0x4400, 0x300, 8, "PITCH", ("D", "M", "U")))
     press = MidiEvent(("note", 19), 127, True)
     d.tick(0.001)
     assert leds.sent == [(19, 0)]  # stale LED cleared before any DCS data
@@ -323,6 +332,7 @@ def test_dcsbios_switches() -> None:
     # physical order, never down -> up or up -> down in one command
     assert sock.sent == [b"AP_PITCH_SW 2\n", b"AP_PITCH_SW 1\n", b"AP_PITCH_SW 0\n", b"AP_PITCH_SW 1\n",
                          b"AP_PITCH_SW 2\n"]
+    assert len(clicks) == 5  # one per press, also the refused one
     # what DCS reported after each press, the unchanged mid on the refused one; the late move didn't show
     assert shown == ["DCS-BIOS connected  F-16C_50", "PITCH  U", "PITCH  M", "PITCH  D", "PITCH  M", "PITCH  M"]
     assert leds.sent == [(19, 0), (19, 127), (19, 0), (19, 127), (19, 0), (19, 127)]  # down = slow blink, on

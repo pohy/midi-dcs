@@ -219,9 +219,11 @@ class DcsSwitches:
     """Presses queue up on the MIDI thread; commands, export, LEDs and overlay run in tick() on the main thread."""
 
     def __init__(self, switches: dict[str, DcsSwitch], leds: mido.ports.BaseOutput, channel: int,
-                 export: socket.socket, show: Callable[[str], None] = lambda text: None) -> None:
+                 export: socket.socket, show: Callable[[str], None] = lambda text: None,
+                 click: Callable[[], None] = lambda: None) -> None:
         self.switches = switches
         self.show = show  # overlay text on (dis)connects and on positions DCS reports right after a press
+        self.click = click  # on every press, also when DCS then refuses the move
         self.leds = leds
         self.channel = channel  # 0-based, LED note_on goes out on it
         self.export = export
@@ -255,6 +257,7 @@ class DcsSwitches:
             self.up[ident] = pos == 0
         step = pos + 1 if self.up[ident] else pos - 1
         self.sock.sendto(f"{ident} {step}\n".encode(), ADDR)
+        self.click()
         self.watch[ident] = self.clock + WATCH_S
         self.answered.discard(ident)
 

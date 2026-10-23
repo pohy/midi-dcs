@@ -60,14 +60,15 @@ def open_outputs(conf: Config) -> list[Output]:
         outputs.append(box)
         show = box.show
     if conf.dcsbios.knobs:
-        click = sound.Clicker(conf.sound).play if conf.sound.clicks else lambda: None
-        outputs.append(dcsbios.DcsBios(conf.dcsbios.knobs, click, show))
+        knob = sound.Clicker(conf.sound.knob).play if conf.sound.knob else lambda: None
+        outputs.append(dcsbios.DcsBios(conf.dcsbios.knobs, knob, show))
     if conf.dcsbios.switches:
         if conf.midi.port is None:
             raise SystemExit("[midi] port needed for switch LEDs, the default MIDI output is usually a synth")
         leds = mido.open_output(midi.find_port(conf.midi.port, mido.get_output_names()))
         channel = (conf.midi.channel or 1) - 1
-        outputs.append(dcsbios.DcsSwitches(conf.dcsbios.switches, leds, channel, dcsbios.listen(), show))
+        switch = sound.Clicker(conf.sound.switch).play if conf.sound.switch else lambda: None
+        outputs.append(dcsbios.DcsSwitches(conf.dcsbios.switches, leds, channel, dcsbios.listen(), show, switch))
     return outputs
 
 
