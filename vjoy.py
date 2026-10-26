@@ -39,8 +39,8 @@ def parse(cfg: ConfigParser) -> VJoyConfig:
 
 
 def summary(conf: VJoyConfig) -> str:
-    return " ".join([f"{n}=cc{c}" for n, c in conf.axes.items()]
-                    + [f"btn{b}={k}{n}" for b, (k, n) in conf.buttons.items()])
+    return " ".join([f"{n}=cc:{c}" for n, c in conf.axes.items()]
+                    + [f"btn{b}={k}:{n}" for b, (k, n) in conf.buttons.items()])
 
 
 def cc_to_axis(value: int) -> int:

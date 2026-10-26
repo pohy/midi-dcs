@@ -83,7 +83,7 @@ class DcsConfig:
 
 
 def parse(cfg: ConfigParser, json_dir: Path) -> DcsConfig:
-    """[dcsbios:AIRCRAFT] IDENTIFIER = cc N | note N [hold [OFF]], checked against the aircraft json."""
+    """[dcsbios:AIRCRAFT] IDENTIFIER = cc:N | note:N [hold[:OFF]] in any order, checked against the aircraft json."""
     # ponytail: one aircraft; several sections need aircraft detection from the DCS-BIOS export stream
     sections = [s for s in cfg.sections() if s.startswith("dcsbios:")]
     if not sections:
@@ -99,24 +99,31 @@ def parse(cfg: ConfigParser, json_dir: Path) -> DcsConfig:
         c = controls.get(ident.upper())
         if c is None:
             raise ValueError(f"[{section}] unknown control '{ident}', look it up in Bort")
-        src, hold, off_src = src.lower().partition("hold")
-        kind, num = parse_source(src.strip(), where)
+        # arg[:value] in any order: one source, the rest options
+        args = src.split()
+        sources = [a for a in args if a.lower().startswith(("note:", "cc:"))]
+        opts = [a for a in args if a not in sources]
+        if len(sources) != 1:
+            raise ValueError(f"{where} needs one 'note:N' or 'cc:N', got '{src}'")
+        kind, num = parse_source(sources[0], where)
         name, positions = c.get("description", c["identifier"]), tuple(c.get("positions", ()))
         max_value = next((i.get("max_value") for i in c["inputs"] if i.get("interface") == "set_state"), None)
         if max_value is None:
             raise ValueError(f"{where} has no set_state input")
         off = None
-        if hold:
-            off_src = off_src.strip() or "1"  # middle
-            if kind == "cc" or max_value != 2 or off_src not in ("0", "1", "2"):
-                raise ValueError(f"{where}: 'note N hold OFF' needs a 3-position switch, OFF = 0 (bottom) to 2")
+        if opts:
+            opt, _, off_src = opts[0].lower().partition(":")
+            off_src = off_src or "1"  # middle
+            if len(opts) > 1 or opt != "hold" or kind == "cc" or max_value != 2 or off_src not in ("0", "1", "2"):
+                raise ValueError(f"{where}: only option is 'hold[:OFF]' on 3-position 'note:N' switches, "
+                                 f"OFF = 0 (bottom) to 2, got '{' '.join(opts)}'")
             off = int(off_src)
         if kind == "cc":
             knobs[c["identifier"]] = DcsControl(num, max_value, name, positions)
             continue
         out = next((o for o in c.get("outputs", []) if o["type"] == "integer"), None)
         if max_value >= len(PATTERNS) or out is None:
-            raise ValueError(f"{where}: 'note N' cycles switches of up to {len(PATTERNS)} positions, use 'cc N'")
+            raise ValueError(f"{where}: 'note:N' cycles switches of up to {len(PATTERNS)} positions, use 'cc:N'")
         switches[c["identifier"]] = DcsSwitch(num, max_value, out["address"], out["mask"], out["shift_by"],
                                               name, positions, off)
     return DcsConfig(knobs, switches)
@@ -133,8 +140,8 @@ def _load_controls(json_dir: Path, section: str) -> dict[str, _Control]:
 
 
 def summary(conf: DcsConfig) -> str:
-    return " ".join([f"{ident}=cc{c.cc}" for ident, c in conf.knobs.items()]
-                    + [f"{ident}=note{s.note}" for ident, s in conf.switches.items()])
+    return " ".join([f"{ident}=cc:{c.cc}" for ident, c in conf.knobs.items()]
+                    + [f"{ident}=note:{s.note}" for ident, s in conf.switches.items()])
 
 
 def cc_to_state(value: int, max_value: int) -> int:

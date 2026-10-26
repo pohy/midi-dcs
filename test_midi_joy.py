@@ -91,12 +91,12 @@ def test_midi_event_and_describe() -> None:
     assert midi_event(mido.Message("control_change", control=64, value=64)) == (("cc", 64), 64, True)
     assert midi_event(mido.Message("control_change", control=64, value=63)) == (("cc", 64), 63, False)
     assert midi_event(mido.Message("pitchwheel")) is None
-    assert describe(note) == "ch1 note 1 press"
-    assert describe(mido.Message("control_change", channel=15, control=62, value=5)) == "ch16 cc 62 = 5"
+    assert describe(note) == "ch1 note:1 press"
+    assert describe(mido.Message("control_change", channel=15, control=62, value=5)) == "ch16 cc:62 = 5"
 
 
 def test_load_config() -> None:
-    c = _load("[midi]\nport = MIDI Mix\n[axes]\nX = 19  ; fader 1\nrz = 23\n[buttons]\n1 = note 1\n12 = CC 64\n")
+    c = _load("[midi]\nport = MIDI Mix\n[axes]\nX = 19  ; fader 1\nrz = 23\n[buttons]\n1 = note:1\n12 = CC:64\n")
     assert (c.midi.port, c.midi.channel, c.vjoy.device, c.vjoy.smooth) == ("MIDI Mix", None, 1, 0.05)
     assert c.midi.hold_s == 0.5
     assert c.vjoy.axes == {"x": 19, "rz": 23}
@@ -106,30 +106,39 @@ def test_load_config() -> None:
     assert c.overlay is None  # off without [overlay]
     assert _load("[midi]\n").vjoy.axes == {}  # sections optional; main() rejects an empty mapping
     _rejects("[axes]\nfoo = 1\n", "[axes]\nz = 128\n", "[axes]\nz = abc\n", "[midi]\nchannel = 17\n",
-             "[buttons]\n1 = foo 3\n", "[buttons]\n1 = note\n", "[buttons]\n0 = note 1\n",
-             "[buttons]\n129 = note 1\n", "[buttons]\n1 = note 128\n", "[buttons]\nx = note 1\n",
+             "[buttons]\n1 = foo 3\n", "[buttons]\n1 = note\n", "[buttons]\n0 = note:1\n",
+             "[buttons]\n129 = note:1\n", "[buttons]\n1 = note 1\n", "[buttons]\n1 = note:1 hold\n", "[buttons]\n1 = note:128\n", "[buttons]\nx = note:1\n",
              "[midi]\nhold_s = 0\n")
 
 
 def test_load_config_dcsbios() -> None:
-    c = _load("[dcsbios:F-16C_50]\nanti_coll_light_knb = cc 17\nFORM_LIGHT_KNB = cc 18\nap_pitch_sw = note 19\n"
-              "laser_arm_sw = note 18\n")
+    c = _load("[dcsbios:F-16C_50]\nanti_coll_light_knb = cc:17\nFORM_LIGHT_KNB = cc:18\nap_pitch_sw = note:19\n"
+              "laser_arm_sw = note:18\n")
     assert c.dcsbios.knobs == {
         "ANTI_COLL_LIGHT_KNB": (17, 7, "ANTI-COLL Knob", ("OFF", "1", "2", "3", "4", "A", "B", "C")),
         "FORM_LIGHT_KNB": (18, 65535, "FORM_LIGHT_KNB", ())}  # no description: identifier
     assert c.dcsbios.switches == {
         "AP_PITCH_SW": (19, 2, 17408, 768, 8, "Autopilot PITCH Switch", ("ATT HOLD", "A/P OFF", "ALT HOLD"), None),
         "LASER_ARM_SW": (18, 1, 17448, 8, 3, "LASER_ARM_SW", (), None)}
-    assert _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = note 19 hold\n").dcsbios.switches["AP_PITCH_SW"].off == 1
-    assert _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = note 19 HOLD 0\n").dcsbios.switches["AP_PITCH_SW"].off == 0
-    _rejects("[dcsbios:F-16C_50]\nFOO = cc 1\n",  # unknown control
-             "[dcsbios:F-16C_50]\nANTI_COLL_LIGHT_KNB = note 1\n",  # 8 positions, notes cycle up to 5
-             "[dcsbios:F-16C_50]\nALT_BARO_SET_KNB = cc 1\n",  # no set_state input
-             "[dcsbios:F-16C_50]\nLASER_ARM_SW = note 18 hold\n",  # hold needs 3 positions
-             "[dcsbios:F-16C_50]\nAP_PITCH_SW = cc 19 hold\n",  # and a note
-             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note 19 hold 3\n",  # off position out of range
-             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note 19 hold x\n",
-             "[dcsbios:A-10C]\nFOO = cc 1\n",  # no json
+    assert _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold\n").dcsbios.switches["AP_PITCH_SW"].off == 1
+    assert _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 HOLD:0\n").dcsbios.switches["AP_PITCH_SW"].off == 0
+    hold_first = _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = hold:0 note:19\n").dcsbios.switches["AP_PITCH_SW"]
+    assert (hold_first.note, hold_first.off) == (19, 0)
+    _rejects("[dcsbios:F-16C_50]\nFOO = cc:1\n",  # unknown control
+             "[dcsbios:F-16C_50]\nANTI_COLL_LIGHT_KNB = note:1\n",  # 8 positions, notes cycle up to 5
+             "[dcsbios:F-16C_50]\nALT_BARO_SET_KNB = cc:1\n",  # no set_state input
+             "[dcsbios:F-16C_50]\nLASER_ARM_SW = note:18 hold\n",  # hold needs 3 positions
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = cc:19 hold\n",  # and a note
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold:3\n",  # off position out of range
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold:x\n",
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold 0\n",  # old syntax
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 foo\n",  # unknown option
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold hold\n",
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note 19\n",
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = hold\n",  # no source
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 cc:19\n",  # two sources
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW =\n",
+             "[dcsbios:A-10C]\nFOO = cc:1\n",  # no json
              "[dcsbios:F-16C_50]\n[dcsbios:A-10C]\n")  # two aircraft
 
 

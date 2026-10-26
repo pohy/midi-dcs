@@ -41,10 +41,10 @@ def in_range(value: int, lo: int, hi: int, what: str) -> int:
 
 
 def parse_source(src: str, where: str) -> Source:
-    """'note N' / 'cc N' -> ("note"|"cc", N)."""
-    kind, _, num = src.lower().partition(" ")
-    if kind not in ("note", "cc") or not num.strip().isdigit():
-        raise ValueError(f"{where} must be 'note N' or 'cc N', got '{src}'")
+    """'note:N' / 'cc:N' -> ("note"|"cc", N)."""
+    kind, _, num = src.lower().partition(":")
+    if kind not in ("note", "cc") or not num.isdigit():
+        raise ValueError(f"{where} must be 'note:N' or 'cc:N', got '{src}'")
     return cast(Kind, kind), in_range(int(num), 0, 127, where)
 
 
@@ -64,7 +64,7 @@ def describe(msg: mido.Message) -> str:
         return str(msg)
     kind, num = ev.src
     state = f"= {ev.value}" if kind == "cc" else ("press" if ev.pressed else "release")
-    return f"ch{msg.channel + 1} {kind} {num} {state}"
+    return f"ch{msg.channel + 1} {kind}:{num} {state}"
 
 
 def find_port(port: str | None, names: list[str]) -> str | None:
