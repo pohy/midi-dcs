@@ -25,6 +25,9 @@ EXPORT_TIMEOUT_S = 3.0  # export silent this long = DCS gone
 # overlay shows switch changes this long after a press, or the unchanged position if DCS didn't move it
 # ponytail: guessed round trip + switch animation, raise it if slow switches show the old position
 WATCH_S = 1.0
+# hold switch step DCS doesn't report this long = dropped, sent again until WATCH_S ends the travel
+# ponytail: guessed, a normal answer takes ~2 export frames; raise it if low frame rates resend every step
+STEP_S = 0.1
 LED_STEP_S = 0.125  # time per pattern character
 # LED per switch position, counted down from the top: solid, dark, slow blink, fast blink, double flash.
 # Top on and the one below dark gives ON/OFF on 2-position switches and a dark OFF in the middle of 3-position ones.
@@ -70,6 +73,7 @@ class DcsSwitch(NamedTuple):
     shift_by: int
     name: str
     positions: tuple[str, ...]
+    off: int | None = None  # 'hold' switch: position a long press goes to, None = cycles on every press
 
 
 @dataclass(frozen=True)
@@ -79,7 +83,7 @@ class DcsConfig:
 
 
 def parse(cfg: ConfigParser, json_dir: Path) -> DcsConfig:
-    """[dcsbios:AIRCRAFT] IDENTIFIER = cc N | note N, checked against the aircraft json."""
+    """[dcsbios:AIRCRAFT] IDENTIFIER = cc N | note N [hold [OFF]], checked against the aircraft json."""
     # ponytail: one aircraft; several sections need aircraft detection from the DCS-BIOS export stream
     sections = [s for s in cfg.sections() if s.startswith("dcsbios:")]
     if not sections:
@@ -95,11 +99,18 @@ def parse(cfg: ConfigParser, json_dir: Path) -> DcsConfig:
         c = controls.get(ident.upper())
         if c is None:
             raise ValueError(f"[{section}] unknown control '{ident}', look it up in Bort")
-        kind, num = parse_source(src, where)
+        src, hold, off_src = src.lower().partition("hold")
+        kind, num = parse_source(src.strip(), where)
         name, positions = c.get("description", c["identifier"]), tuple(c.get("positions", ()))
         max_value = next((i.get("max_value") for i in c["inputs"] if i.get("interface") == "set_state"), None)
         if max_value is None:
             raise ValueError(f"{where} has no set_state input")
+        off = None
+        if hold:
+            off_src = off_src.strip() or "1"  # middle
+            if kind == "cc" or max_value != 2 or off_src not in ("0", "1", "2"):
+                raise ValueError(f"{where}: 'note N hold OFF' needs a 3-position switch, OFF = 0 (bottom) to 2")
+            off = int(off_src)
         if kind == "cc":
             knobs[c["identifier"]] = DcsControl(num, max_value, name, positions)
             continue
@@ -107,7 +118,7 @@ def parse(cfg: ConfigParser, json_dir: Path) -> DcsConfig:
         if max_value >= len(PATTERNS) or out is None:
             raise ValueError(f"{where}: 'note N' cycles switches of up to {len(PATTERNS)} positions, use 'cc N'")
         switches[c["identifier"]] = DcsSwitch(num, max_value, out["address"], out["mask"], out["shift_by"],
-                                              name, positions)
+                                              name, positions, off)
     return DcsConfig(knobs, switches)
 
 
@@ -162,11 +173,16 @@ def switch_state(mem: bytearray, sw: DcsSwitch) -> int:
     return (int.from_bytes(mem[sw.address:sw.address + 2], "little") & sw.mask) >> sw.shift_by
 
 
-def led_on(state: int | None, max_value: int, clock: float) -> bool:
-    """LED pattern for the position at clock; dark while not yet known or out of range (another aircraft)."""
-    if state is None or state > max_value:
+def led_on(state: int | None, sw: DcsSwitch, clock: float) -> bool:
+    """LED pattern for the position at clock; dark while not yet known or out of range (another aircraft).
+    A hold switch's off position takes the dark pattern, wherever it sits."""
+    if state is None or state > sw.max_value:
         return False
-    pattern = PATTERNS[max_value - state]
+    order = list(range(sw.max_value, -1, -1))  # top first
+    if sw.off is not None:
+        order.remove(sw.off)
+        order.insert(1, sw.off)
+    pattern = PATTERNS[order.index(state)]
     return pattern[int(clock / LED_STEP_S) % len(pattern)] == "1"
 
 
@@ -219,9 +235,10 @@ class DcsSwitches:
     """Presses queue up on the MIDI thread; commands, export, LEDs and overlay run in tick() on the main thread."""
 
     def __init__(self, switches: dict[str, DcsSwitch], leds: mido.ports.BaseOutput, channel: int,
-                 export: socket.socket, show: Callable[[str], None] = lambda text: None,
+                 export: socket.socket, hold_s: float, show: Callable[[str], None] = lambda text: None,
                  click: Callable[[], None] = lambda: None) -> None:
         self.switches = switches
+        self.hold_s = hold_s  # long press on hold switches
         self.show = show  # overlay text on (dis)connects and on positions DCS reports right after a press
         self.click = click  # on every press, also when DCS then refuses the move
         self.leds = leds
@@ -232,7 +249,10 @@ class DcsSwitches:
         self.state: dict[str, int | None] = dict.fromkeys(switches)  # None until the first export packet
         self.led_sent: dict[str, bool | None] = dict.fromkeys(switches)
         self.up = dict.fromkeys(switches, True)  # travel direction of the next press
-        self.presses: deque[str] = deque()  # thread-safe append/popleft
+        self.notes: deque[tuple[str, bool]] = deque()  # (ident, pressed), thread-safe append/popleft
+        self.held: dict[str, float] = {}  # hold switches down, clock at the press
+        # hold switch moving: (target, last position sent, clock when sent)
+        self.travel: dict[str, tuple[int, int, float]] = {}
         self.watch: dict[str, float] = {}  # clock until which DCS's answer to a press shows
         self.answered: set[str] = set()  # watched switches that changed since the press
         self.clock = 0.0
@@ -241,8 +261,9 @@ class DcsSwitches:
 
     def on_midi(self, ev: MidiEvent) -> None:
         for ident, sw in self.switches.items():
-            if ev.src == ("note", sw.note) and ev.pressed:
-                self.presses.append(ident)
+            # releases only matter on hold switches
+            if ev.src == ("note", sw.note) and (ev.pressed or sw.off is not None):
+                self.notes.append((ident, ev.pressed))
 
     def _press(self, ident: str) -> None:
         """One position along the travel, turning around at the ends (3-position: mid, up, mid, down, mid).
@@ -260,6 +281,43 @@ class DcsSwitches:
         self.click()
         self.watch[ident] = self.clock + WATCH_S
         self.answered.discard(ident)
+
+    def _toggle(self, ident: str, long: bool) -> None:
+        """Hold switch: long press to off, short press to the upper of the other two positions, or the lower
+        one when already there. Aims from the target of a travel still under way."""
+        sw, state = self.switches[ident], self.state[ident]
+        assert sw.off is not None
+        lower, upper = [p for p in range(sw.max_value + 1) if p != sw.off]
+        pos = self.travel[ident][0] if ident in self.travel else state
+        target = sw.off if long else lower if pos == upper else upper
+        if target == pos:
+            self.show(label(sw, target))  # long press, already off
+            return
+        self.click()
+        self.watch[ident] = self.clock + WATCH_S
+        self.answered.discard(ident)
+        if state is None:
+            self.sock.sendto(f"{ident} {target}\n".encode(), ADDR)  # DCS not reporting, nothing to step along
+            return
+        # a step still in flight is waited for, stepping on from the stale state would end the travel early
+        # or skip the middle
+        _, sent, since = self.travel.get(ident, (target, state, self.clock))
+        self.travel[ident] = (target, sent, since)
+        self._travel(ident)
+
+    def _travel(self, ident: str) -> None:
+        """One position per command like a real toggle passing the middle, the next once DCS reports the last.
+        A step not reported within STEP_S counts as dropped and goes again from the reported position."""
+        target, sent, since = self.travel[ident]
+        state = self.state[ident]
+        if state is not None and state != sent and self.clock - since < STEP_S:
+            return  # in flight
+        if state is None or state == target:
+            del self.travel[ident]
+            return
+        step = state + 1 if target > state else state - 1
+        self.sock.sendto(f"{ident} {step}\n".encode(), ADDR)
+        self.travel[ident] = (target, step, self.clock)
 
     def tick(self, dt: float) -> None:
         self.clock += dt
@@ -297,15 +355,28 @@ class DcsSwitches:
                     self.answered.add(ident)
                     self.show(label(sw, state))
                 self.state[ident] = state
-        while self.presses:
-            self._press(self.presses.popleft())
+        while self.notes:
+            ident, pressed = self.notes.popleft()
+            if self.switches[ident].off is None:
+                self._press(ident)
+            elif pressed:
+                self.held[ident] = self.clock
+            elif self.held.pop(ident, None) is not None:  # released before hold_s
+                self._toggle(ident, long=False)
+        for ident in [i for i, since in self.held.items() if self.clock - since >= self.hold_s]:
+            del self.held[ident]  # fires while still held, the release is ignored
+            self._toggle(ident, long=True)
         for ident in [i for i, until in self.watch.items() if self.clock >= until]:
             del self.watch[ident]
+            # DCS refused a step: stop, or a later move with the mouse would resume the travel
+            self.travel.pop(ident, None)
             state = self.state[ident]
             if ident not in self.answered and state is not None:
                 self.show(label(self.switches[ident], state))  # DCS didn't move it
+        for ident in list(self.travel):
+            self._travel(ident)
         for ident, sw in self.switches.items():
-            on = led_on(self.state[ident], sw.max_value, self.clock)
+            on = led_on(self.state[ident], sw, self.clock)
             if on == self.led_sent[ident]:
                 continue
             self.led_sent[ident] = on

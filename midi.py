@@ -19,13 +19,18 @@ class MidiEvent(NamedTuple):
 class MidiConfig:
     port: str | None  # port name or part of it, None = system default
     channel: int | None  # 1-16, None = any
+    hold_s: float  # held at least this long = long press, on DCS-BIOS hold switches
 
 
 def parse(cfg: ConfigParser) -> MidiConfig:
     channel = cfg.getint("midi", "channel", fallback=None)
+    hold_s = cfg.getfloat("midi", "hold_s", fallback=0.5)
+    if hold_s <= 0:
+        raise ValueError(f"[midi] hold_s must be above 0, got {hold_s}")
     return MidiConfig(
         port=cfg.get("midi", "port", fallback=None) or None,
         channel=None if channel is None else in_range(channel, 1, 16, "[midi] channel"),
+        hold_s=hold_s,
     )
 
 

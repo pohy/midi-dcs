@@ -68,7 +68,8 @@ def open_outputs(conf: Config) -> list[Output]:
         leds = mido.open_output(midi.find_port(conf.midi.port, mido.get_output_names()))
         channel = (conf.midi.channel or 1) - 1
         switch = sound.Clicker(conf.sound.switch).play if conf.sound.switch else lambda: None
-        outputs.append(dcsbios.DcsSwitches(conf.dcsbios.switches, leds, channel, dcsbios.listen(), show, switch))
+        outputs.append(dcsbios.DcsSwitches(conf.dcsbios.switches, leds, channel, dcsbios.listen(), conf.midi.hold_s,
+                                           show, switch))
     return outputs
 
 
