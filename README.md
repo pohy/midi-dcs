@@ -89,7 +89,7 @@ RF_SW = { note = 16 }
 # push button (momentary in the DCS-BIOS json): held down while the note is
 # latch = true: each press toggles it instead (pressed, released, ...)
 MASTER_CAUTION = { note = 25 }
-RWR_PWR_BTN = { note = 72, latch = true }
+ECM_RESET_BTN = { note = 72, latch = true }
 
 # rocker: up holds the top position, down the bottom, release centers; 3-position switches only
 MFD_L_BRT_SW = { up = 31, down = 32 }
