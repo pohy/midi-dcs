@@ -83,7 +83,7 @@ class DcsConfig:
 
 
 def parse(cfg: ConfigParser, json_dir: Path) -> DcsConfig:
-    """[dcsbios:AIRCRAFT] IDENTIFIER = cc:N | note:N [hold[:OFF]] in any order, checked against the aircraft json."""
+    """[dcsbios:AIRCRAFT] IDENTIFIER = cc:N | note:N [hold [off:OFF]] in any order, checked against the aircraft json."""
     # ponytail: one aircraft; several sections need aircraft detection from the DCS-BIOS export stream
     sections = [s for s in cfg.sections() if s.startswith("dcsbios:")]
     if not sections:
@@ -112,11 +112,13 @@ def parse(cfg: ConfigParser, json_dir: Path) -> DcsConfig:
             raise ValueError(f"{where} has no set_state input")
         off = None
         if opts:
-            opt, _, off_src = opts[0].lower().partition(":")
-            off_src = off_src or "1"  # middle
-            if len(opts) > 1 or opt != "hold" or kind == "cc" or max_value != 2 or off_src not in ("0", "1", "2"):
-                raise ValueError(f"{where}: only option is 'hold[:OFF]' on 3-position 'note:N' switches, "
-                                 f"OFF = 0 (bottom) to 2, got '{' '.join(opts)}'")
+            pairs = [o.lower().partition(":") for o in opts]
+            named = {k: v for k, _, v in pairs}
+            off_src = named.get("off", "1")  # middle
+            if (len(named) != len(pairs) or named.keys() - {"hold", "off"} or named.get("hold") != ""
+                    or kind == "cc" or max_value != 2 or off_src not in ("0", "1", "2")):
+                raise ValueError(f"{where}: options are 'hold' and 'off:OFF' (0 bottom to 2, default 1) on "
+                                 f"3-position 'note:N' switches, got '{' '.join(opts)}'")
             off = int(off_src)
         if kind == "cc":
             knobs[c["identifier"]] = DcsControl(num, max_value, name, positions)

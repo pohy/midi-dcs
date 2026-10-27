@@ -121,16 +121,20 @@ def test_load_config_dcsbios() -> None:
         "AP_PITCH_SW": (19, 2, 17408, 768, 8, "Autopilot PITCH Switch", ("ATT HOLD", "A/P OFF", "ALT HOLD"), None),
         "LASER_ARM_SW": (18, 1, 17448, 8, 3, "LASER_ARM_SW", (), None)}
     assert _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold\n").dcsbios.switches["AP_PITCH_SW"].off == 1
-    assert _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 HOLD:0\n").dcsbios.switches["AP_PITCH_SW"].off == 0
-    hold_first = _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = hold:0 note:19\n").dcsbios.switches["AP_PITCH_SW"]
+    assert _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 HOLD OFF:0\n").dcsbios.switches["AP_PITCH_SW"].off == 0
+    hold_first = _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = off:0 hold note:19\n").dcsbios.switches["AP_PITCH_SW"]
     assert (hold_first.note, hold_first.off) == (19, 0)
     _rejects("[dcsbios:F-16C_50]\nFOO = cc:1\n",  # unknown control
              "[dcsbios:F-16C_50]\nANTI_COLL_LIGHT_KNB = note:1\n",  # 8 positions, notes cycle up to 5
              "[dcsbios:F-16C_50]\nALT_BARO_SET_KNB = cc:1\n",  # no set_state input
              "[dcsbios:F-16C_50]\nLASER_ARM_SW = note:18 hold\n",  # hold needs 3 positions
              "[dcsbios:F-16C_50]\nAP_PITCH_SW = cc:19 hold\n",  # and a note
-             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold:3\n",  # off position out of range
-             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold:x\n",
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold off:3\n",  # off position out of range
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold off:x\n",
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold off:\n",
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 off:0\n",  # off without hold
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold off:0 off:1\n",
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold:0\n",  # old syntax
              "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold 0\n",  # old syntax
              "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 foo\n",  # unknown option
              "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold hold\n",

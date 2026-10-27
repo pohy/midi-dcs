@@ -71,9 +71,9 @@ HMCS_INT_KNB = cc:59
 RF_SW = note:16
 
 ; hold: long press = OFF position, short press flips between the other two
-; OFF = 0 (bottom) to 2; omitted = 1 (middle); args in any order (hold:0 note:13)
+; off:OFF = 0 (bottom) to 2; omitted = 1 (middle); args in any order (off:0 hold note:13)
 AP_PITCH_SW = note:19 hold
-MASTER_ARM_SW = note:13 hold:0
+MASTER_ARM_SW = note:13 hold off:0
 ```
 
 Note switches need `[midi] port` set (LED output goes to the same device).
