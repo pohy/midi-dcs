@@ -74,6 +74,7 @@ class DcsSwitch(NamedTuple):
     name: str
     positions: tuple[str, ...]
     off: int | None = None  # 'hold' switch: position a long press goes to, None = cycles on every press
+    dark: int | None = None  # position with the dark LED, None = off on hold switches, else second from the top
 
 
 @dataclass(frozen=True)
@@ -83,7 +84,8 @@ class DcsConfig:
 
 
 def parse(cfg: ConfigParser, json_dir: Path) -> DcsConfig:
-    """[dcsbios:AIRCRAFT] IDENTIFIER = cc:N | note:N [hold [off:OFF]] in any order, checked against the aircraft json."""
+    """[dcsbios:AIRCRAFT] IDENTIFIER = cc:N | note:N [hold [off:OFF]] [dark:N] in any order, checked against the
+    aircraft json."""
     # ponytail: one aircraft; several sections need aircraft detection from the DCS-BIOS export stream
     sections = [s for s in cfg.sections() if s.startswith("dcsbios:")]
     if not sections:
@@ -110,16 +112,23 @@ def parse(cfg: ConfigParser, json_dir: Path) -> DcsConfig:
         max_value = next((i.get("max_value") for i in c["inputs"] if i.get("interface") == "set_state"), None)
         if max_value is None:
             raise ValueError(f"{where} has no set_state input")
-        off = None
-        if opts:
-            pairs = [o.lower().partition(":") for o in opts]
-            named = {k: v for k, _, v in pairs}
+        pairs = [o.lower().partition(":") for o in opts]
+        named = {k: v for k, _, v in pairs}
+        if len(named) != len(pairs) or named.keys() - {"hold", "off", "dark"} or (named and kind == "cc"):
+            raise ValueError(f"{where}: options are 'hold', 'off:OFF' and 'dark:N' on 'note:N' switches, "
+                             f"got '{' '.join(opts)}'")
+        off = dark = None
+        if "hold" in named or "off" in named:
             off_src = named.get("off", "1")  # middle
-            if (len(named) != len(pairs) or named.keys() - {"hold", "off"} or named.get("hold") != ""
-                    or kind == "cc" or max_value != 2 or off_src not in ("0", "1", "2")):
-                raise ValueError(f"{where}: options are 'hold' and 'off:OFF' (0 bottom to 2, default 1) on "
-                                 f"3-position 'note:N' switches, got '{' '.join(opts)}'")
+            if named.get("hold") != "" or max_value != 2 or off_src not in ("0", "1", "2"):
+                raise ValueError(f"{where}: 'hold' and 'off:OFF' (0 bottom to 2, default 1) need a 3-position "
+                                 f"switch, got '{' '.join(opts)}'")
             off = int(off_src)
+        if "dark" in named:
+            if named["dark"] not in [str(p) for p in range(max_value + 1)]:
+                raise ValueError(f"{where}: 'dark:N' takes a position from 0 (bottom) to {max_value}, "
+                                 f"got 'dark:{named['dark']}'")
+            dark = int(named["dark"])
         if kind == "cc":
             knobs[c["identifier"]] = DcsControl(num, max_value, name, positions)
             continue
@@ -127,7 +136,7 @@ def parse(cfg: ConfigParser, json_dir: Path) -> DcsConfig:
         if max_value >= len(PATTERNS) or out is None:
             raise ValueError(f"{where}: 'note:N' cycles switches of up to {len(PATTERNS)} positions, use 'cc:N'")
         switches[c["identifier"]] = DcsSwitch(num, max_value, out["address"], out["mask"], out["shift_by"],
-                                              name, positions, off)
+                                              name, positions, off, dark)
     return DcsConfig(knobs, switches)
 
 
@@ -184,13 +193,14 @@ def switch_state(mem: bytearray, sw: DcsSwitch) -> int:
 
 def led_on(state: int | None, sw: DcsSwitch, clock: float) -> bool:
     """LED pattern for the position at clock; dark while not yet known or out of range (another aircraft).
-    A hold switch's off position takes the dark pattern, wherever it sits."""
+    The dark position (default: a hold switch's off) takes the dark pattern, wherever it sits."""
     if state is None or state > sw.max_value:
         return False
     order = list(range(sw.max_value, -1, -1))  # top first
-    if sw.off is not None:
-        order.remove(sw.off)
-        order.insert(1, sw.off)
+    dark = sw.off if sw.dark is None else sw.dark
+    if dark is not None:
+        order.remove(dark)
+        order.insert(1, dark)
     pattern = PATTERNS[order.index(state)]
     return pattern[int(clock / LED_STEP_S) % len(pattern)] == "1"
 

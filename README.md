@@ -74,11 +74,14 @@ RF_SW = note:16
 ; off:OFF = 0 (bottom) to 2; omitted = 1 (middle); args in any order (off:0 hold note:13)
 AP_PITCH_SW = note:19 hold
 MASTER_ARM_SW = note:13 hold off:0
+
+; dark:N = position with the dark LED, 0 (bottom) up; any note switch
+RF_SW = note:16 dark:2
 ```
 
 Note switches need `[midi] port` set (LED output goes to the same device).
 
-Button LED per position, counted from the top: solid, dark, slow blink, fast blink, double flash. Hold switches: dark in OFF, solid in the upper, slow blink in the lower position. All LEDs go dark at mission end, with no aircraft, or after 3 s without DCS-BIOS data.
+Button LED per position, counted from the top: solid, dark, slow blink, fast blink, double flash. Hold switches: dark in OFF, solid in the upper, slow blink in the lower position. `dark:N` moves the dark LED to position N, the others keep their order from the top (`RF_SW` above: top dark, middle solid, bottom slow blink). All LEDs go dark at mission end, with no aircraft, or after 3 s without DCS-BIOS data.
 
 ### Sound
 

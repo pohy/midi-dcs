@@ -118,12 +118,16 @@ def test_load_config_dcsbios() -> None:
         "ANTI_COLL_LIGHT_KNB": (17, 7, "ANTI-COLL Knob", ("OFF", "1", "2", "3", "4", "A", "B", "C")),
         "FORM_LIGHT_KNB": (18, 65535, "FORM_LIGHT_KNB", ())}  # no description: identifier
     assert c.dcsbios.switches == {
-        "AP_PITCH_SW": (19, 2, 17408, 768, 8, "Autopilot PITCH Switch", ("ATT HOLD", "A/P OFF", "ALT HOLD"), None),
-        "LASER_ARM_SW": (18, 1, 17448, 8, 3, "LASER_ARM_SW", (), None)}
+        "AP_PITCH_SW": (19, 2, 17408, 768, 8, "Autopilot PITCH Switch", ("ATT HOLD", "A/P OFF", "ALT HOLD"), None,
+                        None),
+        "LASER_ARM_SW": (18, 1, 17448, 8, 3, "LASER_ARM_SW", (), None, None)}
     assert _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold\n").dcsbios.switches["AP_PITCH_SW"].off == 1
     assert _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 HOLD OFF:0\n").dcsbios.switches["AP_PITCH_SW"].off == 0
     hold_first = _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = off:0 hold note:19\n").dcsbios.switches["AP_PITCH_SW"]
     assert (hold_first.note, hold_first.off) == (19, 0)
+    assert _load("[dcsbios:F-16C_50]\nLASER_ARM_SW = DARK:1 note:18\n").dcsbios.switches["LASER_ARM_SW"].dark == 1
+    hold_dark = _load("[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 dark:2 hold off:0\n").dcsbios.switches["AP_PITCH_SW"]
+    assert (hold_dark.off, hold_dark.dark) == (0, 2)
     _rejects("[dcsbios:F-16C_50]\nFOO = cc:1\n",  # unknown control
              "[dcsbios:F-16C_50]\nANTI_COLL_LIGHT_KNB = note:1\n",  # 8 positions, notes cycle up to 5
              "[dcsbios:F-16C_50]\nALT_BARO_SET_KNB = cc:1\n",  # no set_state input
@@ -134,6 +138,11 @@ def test_load_config_dcsbios() -> None:
              "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold off:\n",
              "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 off:0\n",  # off without hold
              "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold off:0 off:1\n",
+             "[dcsbios:F-16C_50]\nLASER_ARM_SW = note:18 dark:2\n",  # dark position out of range
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 dark:\n",
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 dark\n",
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 dark:0 dark:1\n",
+             "[dcsbios:F-16C_50]\nAP_PITCH_SW = cc:19 dark:0\n",  # dark needs a note
              "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold:0\n",  # old syntax
              "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 hold 0\n",  # old syntax
              "[dcsbios:F-16C_50]\nAP_PITCH_SW = note:19 foo\n",  # unknown option
@@ -285,13 +294,16 @@ def test_export() -> None:
 
 
 def test_led_on() -> None:
-    def frames(state: int | None, max_value: int, off: int | None = None) -> str:  # 1 s, a char per 125 ms
-        sw = DcsSwitch(1, max_value, 0, 0, 0, "", (), off)
+    def frames(state: int | None, max_value: int, off: int | None = None, dark: int | None = None) -> str:
+        sw = DcsSwitch(1, max_value, 0, 0, 0, "", (), off, dark)  # 1 s, a char per 125 ms
         return "".join("1" if led_on(state, sw, (i + 0.5) * 0.125) else "0" for i in range(8))
     assert [frames(s, 2) for s in (2, 1, 0)] == ["11111111", "00000000", "11110000"]  # up solid, mid dark, down blinks
     assert [frames(s, 2, off=1) for s in (2, 1, 0)] == ["11111111", "00000000", "11110000"]  # hold, mid off: same
     assert [frames(s, 2, off=0) for s in (2, 1, 0)] == ["11111111", "11110000", "00000000"]  # hold, bottom off dark
+    assert [frames(s, 2, dark=2) for s in (2, 1, 0)] == ["00000000", "11111111", "11110000"]  # top dark
+    assert [frames(s, 2, off=0, dark=1) for s in (2, 1, 0)] == ["11111111", "00000000", "11110000"]  # beats off
     assert [frames(s, 1) for s in (1, 0)] == ["11111111", "00000000"]  # 2-position: on / off
+    assert [frames(s, 1, dark=1) for s in (1, 0)] == ["00000000", "11111111"]  # inverted
     assert len({frames(s, 4) for s in range(5)}) == 5  # 5 positions tell apart
     assert frames(None, 2) == frames(3, 2) == "00000000"  # unknown / out of range dark
 
