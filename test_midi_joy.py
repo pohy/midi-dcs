@@ -456,7 +456,7 @@ def test_dcsbios_hold_switch() -> None:
     dcs(0)
     tap()  # up
     dcs(1)  # DCS drops the top
-    d.tick(0.1)
+    d.tick(0.05)  # under STEP_S, still in flight; not on it, float error decides that side
     tap()  # down again while the top is still awaited
     d.tick(0.2)  # top never reported: down from the middle DCS shows
     dcs(0)
