@@ -1,6 +1,6 @@
 # midi-joy
 
-Maps a MIDI controller (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS cockpit controls. Windows only. Configured in `midi_joy.toml`.
+Maps MIDI controllers (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS cockpit controls. Windows only. Configured in `midi_joy.toml`.
 
 ## Features
 
@@ -15,14 +15,15 @@ Maps a MIDI controller (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS co
 ## Requirements
 
 - Python 3.12+, `pip install --group run` (pip 25.1+, `python -m pip install -U pip`); `--group dev` adds mypy, ruff and PyInstaller
-- [vJoy](https://github.com/jshafer817/vJoy) at `C:\Program Files\vJoy` (for `[vjoy.axes]` / `[vjoy.buttons]`)
-- [DCS-BIOS](https://github.com/DCS-Skunkworks/dcs-bios) in `Saved Games\DCS\Scripts\DCS-BIOS` (for `[dcsbios.AIRCRAFT]`)
+- [vJoy](https://github.com/jshafer817/vJoy) at `C:\Program Files\vJoy` (for `[vjoy.axes.DEVICE]` / `[vjoy.buttons.DEVICE]`)
+- [DCS-BIOS](https://github.com/DCS-Skunkworks/dcs-bios) in `Saved Games\DCS\Scripts\DCS-BIOS` (for `[dcsbios.AIRCRAFT.DEVICE]`)
 
 ## Usage
 
 ```
 python midi_joy.py --list       # list MIDI input ports
-python midi_joy.py --monitor    # print incoming MIDI: "ch1 cc:62 = 127" maps as { cc = 62 }, "ch1 note:22 press" as { note = 22 }
+python midi_joy.py --monitor    # print incoming MIDI from every configured device (system default port without any):
+                                # '"MIDI Mix" ch1 cc:62 = 127' maps as { cc = 62 } in a ."MIDI Mix" table, "note:22 press" as { note = 22 }
 python midi_joy.py              # run with midi_joy.toml next to the script
 python midi_joy.py --config other.toml
 ```
@@ -43,10 +44,13 @@ Produces `dist/midi_joy.exe`. Ship it with `midi_joy.toml` and `resources/` next
 
 ```toml
 [midi]
-port = "MIDI Mix" # substring of the port name (see --list); omit = system default
-channel = 1       # 1-16; omit = any channel
 hold_s = 0.5      # long-press threshold for hold switches
+
+[midi."MIDI Mix"] # per device, optional
+channel = 1       # 1-16; omit = any channel
 ```
+
+`DEVICE` is a substring of the port name (see `--list`), quoted if it has spaces or dots. Every mapping table below ends in one: `[vjoy.axes."MIDI Mix"]`, `[dcsbios.F-16C_50."X-Touch Mini"]`. Every device with a mapping or a `[midi.DEVICE]` table opens at start and must be plugged in. An axis, button or DCS-BIOS control takes one device.
 
 ### vJoy
 
@@ -55,11 +59,11 @@ hold_s = 0.5      # long-press threshold for hold switches
 device = 1
 smooth = 0.1      # low-pass time constant in seconds, 0 = off
 
-[vjoy.axes]       # axis = CC number; axes: x y z rx ry rz sl0 sl1
+[vjoy.axes."MIDI Mix"]     # axis = CC number; axes: x y z rx ry rz sl0 sl1
 z = 62
 rx = 58
 
-[vjoy.buttons]    # button 1-128 = { note = N } | { cc = N }
+[vjoy.buttons."MIDI Mix"]  # button 1-128 = { note = N } | { cc = N }
 1 = { note = 22 }
 2 = { cc = 64 }
 ```
@@ -68,10 +72,10 @@ Each axis and button must be enabled in Configure vJoy.
 
 ### DCS-BIOS
 
-One `[dcsbios.AIRCRAFT]` table; `AIRCRAFT` is the JSON name in `Saved Games\DCS\Scripts\DCS-BIOS\doc\json` (quote it if it has spaces: `[dcsbios."Christen Eagle II"]`). Look up identifiers in Bort.
+`[dcsbios.AIRCRAFT.DEVICE]` tables, one aircraft; `AIRCRAFT` is the JSON name in `Saved Games\DCS\Scripts\DCS-BIOS\doc\json` (quote it if it has spaces: `[dcsbios."Christen Eagle II"."MIDI Mix"]`). Look up identifiers in Bort.
 
 ```toml
-[dcsbios.F-16C_50]
+[dcsbios.F-16C_50."MIDI Mix"]
 # knob: one equal zone per switch position; dials (max 65535) map the full range
 ANTI_COLL_LIGHT_KNB = { cc = 17 }
 HMCS_INT_KNB = { cc = 59 }
@@ -89,7 +93,7 @@ MASTER_ARM_SW = { note = 13, hold = true, off = 0 }
 ANTI_SKID_SW = { note = 22, dark = 2 }
 ```
 
-Note switches need `[midi] port` set (LED output goes to the same device).
+A note switch's LED goes to the device the note comes from, on its `channel` (1 without one).
 
 Hold switches move one position at a time like the real switch, so up -> down passes the middle.
 

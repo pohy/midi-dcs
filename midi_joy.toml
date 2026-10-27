@@ -1,27 +1,28 @@
 # options and syntax: README.md
 
 [midi]
-port = "MIDI Mix"
-# channel = 1
 hold_s = 0.5
+
+[midi."MIDI Mix"]
+# channel = 1
 
 [vjoy]
 device = 1
 smooth = 0.1
 
-[vjoy.axes]
+[vjoy.axes."MIDI Mix"]
 # z = 62
 # rx = 58
 # ry = 59
 # rz = 61
 
-[vjoy.buttons]
+[vjoy.buttons."MIDI Mix"]
 # 1 = { note = 1 }
 # 1 = { note = 22 }
 # 2 = { note = 24 }
 3 = { note = 27 }
 
-[dcsbios.F-16C_50]
+[dcsbios.F-16C_50."MIDI Mix"]
 ANTI_COLL_LIGHT_KNB = { cc = 17 }
 MASTER_LIGHT_SW = { cc = 16 }
 AP_PITCH_SW = { note = 19, hold = true }

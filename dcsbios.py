@@ -1,5 +1,5 @@
-"""DCS-BIOS: [dcsbios.AIRCRAFT] table. CCs drive set_state commands over UDP; notes cycle switches of up
-to 5 positions, with the switch state read back from the export stream onto the button LED."""
+"""DCS-BIOS: [dcsbios.AIRCRAFT."DEVICE"] tables. CCs drive set_state commands over UDP; notes cycle switches of up
+to 5 positions, with the switch state read back from the export stream onto the button LED of the same device."""
 import json
 import socket
 import struct
@@ -11,7 +11,7 @@ from typing import NamedTuple, TypedDict
 
 import mido
 
-from midi import MidiEvent, Table, get, parse_source, toml, typed
+from midi import MidiEvent, Source, Table, get, parse_source, toml, typed
 
 # ponytail: default Saved Games path, add a config key if DCS lives elsewhere
 JSON_DIR = Path.home() / "Saved Games/DCS/Scripts/DCS-BIOS/doc/json"
@@ -57,7 +57,7 @@ class _Control(TypedDict, total=False):  # only description and positions are re
 
 
 class DcsControl(NamedTuple):
-    cc: int
+    src: Source  # cc
     max_value: int  # set_state takes 0..max_value
     name: str  # json description, for the overlay
     positions: tuple[str, ...]  # position names, empty if the json has none
@@ -65,7 +65,7 @@ class DcsControl(NamedTuple):
 
 class DcsSwitch(NamedTuple):
     """Switch with positions 0 (bottom) ..max_value (top) stepped by a note, position read from the export."""
-    note: int
+    src: Source  # note, also the LED
     max_value: int
     address: int
     mask: int
@@ -83,7 +83,7 @@ class DcsConfig:
 
 
 def parse(cfg: Table, json_dir: Path) -> DcsConfig:
-    """[dcsbios.AIRCRAFT] IDENTIFIER = { cc = N } | { note = N, hold = true, off = OFF, dark = N } (options
+    """[dcsbios.AIRCRAFT."DEVICE"] IDENTIFIER = { cc = N } | { note = N, hold = true, off = OFF, dark = N } (options
     optional), checked against the aircraft json."""
     # ponytail: one aircraft; several tables need aircraft detection from the DCS-BIOS export stream
     tables = get(cfg, "dcsbios", dict, {}, "")
@@ -91,43 +91,48 @@ def parse(cfg: Table, json_dir: Path) -> DcsConfig:
         return DcsConfig({}, {})
     if len(tables) > 1:
         raise ValueError(f"only one [dcsbios.AIRCRAFT] table supported, got {', '.join(tables)}")
-    [(aircraft, mappings)] = tables.items()
-    section = f"[dcsbios.{aircraft}]"
-    controls = _load_controls(json_dir, aircraft, section)
+    [(aircraft, devices)] = tables.items()
+    controls = _load_controls(json_dir, aircraft, f"[dcsbios.{aircraft}]")
     knobs: dict[str, DcsControl] = {}
     switches: dict[str, DcsSwitch] = {}
-    for ident, src in typed(mappings, dict, section).items():
-        where = f"{section} {ident}"
-        c = controls.get(ident.upper())
-        if c is None:
-            raise ValueError(f"{section} unknown control '{ident}', look it up in Bort")
-        kind, num = parse_source(src, where, ("hold", "off", "dark"))
-        name, positions = c.get("description", c["identifier"]), tuple(c.get("positions", ()))
-        max_value = next((i.get("max_value") for i in c["inputs"] if i.get("interface") == "set_state"), None)
-        if max_value is None:
-            raise ValueError(f"{where} has no set_state input")
-        if kind == "cc" and len(src) > 1:
-            raise ValueError(f"{where}: hold, off and dark are for note switches, got {toml(src)}")
-        hold = get(src, "hold", bool, False, where)
-        off = get(src, "off", int, None, where)
-        dark = get(src, "dark", int, None, where)
-        if off is not None and not hold:
-            raise ValueError(f"{where}: off needs hold = true")
-        if hold:
-            off = 1 if off is None else off  # middle
-            if max_value != 2 or off not in (0, 1, 2):
-                raise ValueError(f"{where}: hold and off (0 bottom to 2, default 1) need a 3-position switch, "
-                                 f"got {toml(src)}")
-        if dark is not None and not 0 <= dark <= max_value:
-            raise ValueError(f"{where}: dark takes a position from 0 (bottom) to {max_value}, got {dark}")
-        if kind == "cc":
-            knobs[c["identifier"]] = DcsControl(num, max_value, name, positions)
-            continue
-        out = next((o for o in c.get("outputs", []) if o["type"] == "integer"), None)
-        if max_value >= len(PATTERNS) or out is None:
-            raise ValueError(f"{where}: note cycles switches of up to {len(PATTERNS)} positions, use cc")
-        switches[c["identifier"]] = DcsSwitch(num, max_value, out["address"], out["mask"], out["shift_by"],
-                                              name, positions, off, dark)
+    for device, mappings in typed(devices, dict, f"[dcsbios.{aircraft}]").items():
+        section = f"[dcsbios.{aircraft}.{toml(device)}]"
+        for ident, src in typed(mappings, dict, section).items():
+            where = f"{section} {ident}"
+            c = controls.get(ident.upper())
+            if c is None:
+                raise ValueError(f"{section} unknown control '{ident}', look it up in Bort")
+            mapped = knobs.get(c["identifier"]) or switches.get(c["identifier"])
+            if mapped:
+                raise ValueError(f"{where}: already mapped in [dcsbios.{aircraft}.{toml(mapped.src[0])}]")
+            source = parse_source(src, device, where, ("hold", "off", "dark"))
+            kind = source[1]
+            name, positions = c.get("description", c["identifier"]), tuple(c.get("positions", ()))
+            max_value = next((i.get("max_value") for i in c["inputs"] if i.get("interface") == "set_state"), None)
+            if max_value is None:
+                raise ValueError(f"{where} has no set_state input")
+            if kind == "cc" and len(src) > 1:
+                raise ValueError(f"{where}: hold, off and dark are for note switches, got {toml(src)}")
+            hold = get(src, "hold", bool, False, where)
+            off = get(src, "off", int, None, where)
+            dark = get(src, "dark", int, None, where)
+            if off is not None and not hold:
+                raise ValueError(f"{where}: off needs hold = true")
+            if hold:
+                off = 1 if off is None else off  # middle
+                if max_value != 2 or off not in (0, 1, 2):
+                    raise ValueError(f"{where}: hold and off (0 bottom to 2, default 1) need a 3-position switch, "
+                                     f"got {toml(src)}")
+            if dark is not None and not 0 <= dark <= max_value:
+                raise ValueError(f"{where}: dark takes a position from 0 (bottom) to {max_value}, got {dark}")
+            if kind == "cc":
+                knobs[c["identifier"]] = DcsControl(source, max_value, name, positions)
+                continue
+            out = next((o for o in c.get("outputs", []) if o["type"] == "integer"), None)
+            if max_value >= len(PATTERNS) or out is None:
+                raise ValueError(f"{where}: note cycles switches of up to {len(PATTERNS)} positions, use cc")
+            switches[c["identifier"]] = DcsSwitch(source, max_value, out["address"], out["mask"], out["shift_by"],
+                                                  name, positions, off, dark)
     return DcsConfig(knobs, switches)
 
 
@@ -140,9 +145,10 @@ def _load_controls(json_dir: Path, aircraft: str, section: str) -> dict[str, _Co
     return {c["identifier"].upper(): c for cat in doc.values() for c in cat.values()}
 
 
-def summary(conf: DcsConfig) -> str:
-    return " ".join([f"{ident}=cc:{c.cc}" for ident, c in conf.knobs.items()]
-                    + [f"{ident}=note:{s.note}" for ident, s in conf.switches.items()])
+def summary(conf: DcsConfig, device: str | None) -> str:
+    """What device drives, for the startup line."""
+    return " ".join([f"{ident}=cc:{c.src[2]}" for ident, c in conf.knobs.items() if c.src[0] == device]
+                    + [f"{ident}=note:{s.src[2]}" for ident, s in conf.switches.items() if s.src[0] == device])
 
 
 def cc_to_state(value: int, max_value: int) -> int:
@@ -207,7 +213,7 @@ def listen() -> socket.socket:
 
 
 class DcsBios:
-    """Plain UDP, so commands go out straight from the MIDI thread."""
+    """Plain UDP, so commands go out straight from the MIDI threads."""
 
     def __init__(self, controls: dict[str, DcsControl], click: Callable[[], None] = lambda: None,
                  show: Callable[[str], None] = lambda text: None) -> None:
@@ -219,7 +225,7 @@ class DcsBios:
 
     def on_midi(self, ev: MidiEvent) -> None:
         for ident, c in self.controls.items():
-            if ev.src != ("cc", c.cc):
+            if ev.src != c.src:
                 continue
             state = cc_to_state(ev.value, c.max_value)
             # ponytail: dedup per zone, so after moving the switch with the mouse
@@ -241,17 +247,16 @@ class DcsBios:
 
 
 class DcsSwitches:
-    """Presses queue up on the MIDI thread; commands, export, LEDs and overlay run in tick() on the main thread."""
+    """Presses queue up on the MIDI threads; commands, export, LEDs and overlay run in tick() on the main thread."""
 
-    def __init__(self, switches: dict[str, DcsSwitch], leds: mido.ports.BaseOutput, channel: int,
+    def __init__(self, switches: dict[str, DcsSwitch], leds: dict[str, tuple[mido.ports.BaseOutput, int]],
                  export: socket.socket, hold_s: float, show: Callable[[str], None] = lambda text: None,
                  click: Callable[[], None] = lambda: None) -> None:
         self.switches = switches
         self.hold_s = hold_s  # long press on hold switches
         self.show = show  # overlay text on (dis)connects and on positions DCS reports right after a press
         self.click = click  # on every press, also when DCS then refuses the move
-        self.leds = leds
-        self.channel = channel  # 0-based, LED note_on goes out on it
+        self.leds = leds  # device -> (MIDI output, 0-based channel the LED note_on goes out on)
         self.export = export
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.mem = bytearray(0x10000)
@@ -271,7 +276,7 @@ class DcsSwitches:
     def on_midi(self, ev: MidiEvent) -> None:
         for ident, sw in self.switches.items():
             # releases only matter on hold switches
-            if ev.src == ("note", sw.note) and (ev.pressed or sw.off is not None):
+            if ev.src == sw.src and (ev.pressed or sw.off is not None):
                 self.notes.append((ident, ev.pressed))
 
     def _press(self, ident: str) -> None:
@@ -389,14 +394,17 @@ class DcsSwitches:
             if on == self.led_sent[ident]:
                 continue
             self.led_sent[ident] = on
-            self._led(sw.note, on)
+            self._led(sw.src, on)
 
-    def _led(self, note: int, on: bool) -> None:
-        self.leds.send(mido.Message("note_on", channel=self.channel, note=note, velocity=127 if on else 0))
+    def _led(self, src: Source, on: bool) -> None:
+        device, _, note = src
+        out, channel = self.leds[device]
+        out.send(mido.Message("note_on", channel=channel, note=note, velocity=127 if on else 0))
 
     def close(self) -> None:
         for sw in self.switches.values():
-            self._led(sw.note, False)
-        self.leds.close()
+            self._led(sw.src, False)
+        for out, _ in self.leds.values():
+            out.close()
         self.export.close()
         self.sock.close()

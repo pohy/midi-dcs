@@ -1,4 +1,5 @@
-"""MIDI input: [midi] table, message decoding, monitor lines, port lookup; config value checks for all tables."""
+"""MIDI input: [midi] and [midi."DEVICE"] tables, message decoding, monitor lines, port lookup; config value checks
+for all tables."""
 import json
 from dataclasses import dataclass
 from typing import Any, Literal, NamedTuple, cast
@@ -6,7 +7,8 @@ from typing import Any, Literal, NamedTuple, cast
 import mido
 
 type Kind = Literal["note", "cc"]
-type Source = tuple[Kind, int]  # ("note", 22) / ("cc", 62), from { note = 22 } / { cc = 62 } in the config
+# (device, kind, number): ("MIDI Mix", "note", 22) from { note = 22 } in [dcsbios.F-16C_50."MIDI Mix"]
+type Source = tuple[str, Kind, int]
 type Table = dict[str, Any]  # parsed toml table
 TYPE_NAMES: dict[type, str] = {str: "a string", int: "an integer", float: "a number", bool: "true or false",
                                dict: "a table"}
@@ -20,22 +22,24 @@ class MidiEvent(NamedTuple):
 
 @dataclass(frozen=True)
 class MidiConfig:
-    port: str | None  # port name or part of it, None = system default
-    channel: int | None  # 1-16, None = any
+    # [midi."DEVICE"] tables: device (port name or part of it) -> channel 1-16, None = any
+    channels: dict[str, int | None]
     hold_s: float  # held at least this long = long press, on DCS-BIOS hold switches
 
 
 def parse(cfg: Table) -> MidiConfig:
     m = get(cfg, "midi", dict, {}, "")
-    channel = get(m, "channel", int, None, "[midi]")
     hold_s = get(m, "hold_s", float, 0.5, "[midi]")
     if hold_s <= 0:
         raise ValueError(f"[midi] hold_s must be above 0, got {hold_s}")
-    return MidiConfig(
-        port=get(m, "port", str, "", "[midi]") or None,
-        channel=None if channel is None else in_range(channel, 1, 16, "[midi] channel"),
-        hold_s=hold_s,
-    )
+    channels: dict[str, int | None] = {}
+    for device, table in m.items():
+        if device == "hold_s":
+            continue
+        where = f"[midi.{toml(device)}]"
+        channel = get(typed(table, dict, where), "channel", int, None, where)
+        channels[device] = None if channel is None else in_range(channel, 1, 16, f"{where} channel")
+    return MidiConfig(channels, hold_s)
 
 
 def typed[T](value: Any, kind: type[T], where: str) -> T:
@@ -65,8 +69,8 @@ def in_range(value: int, lo: int, hi: int, what: str) -> int:
     return value
 
 
-def parse_source(src: Any, where: str, options: tuple[str, ...] = ()) -> Source:
-    """{ note = N } / { cc = N }, plus the caller's option keys -> ("note"|"cc", N)."""
+def parse_source(src: Any, device: str, where: str, options: tuple[str, ...] = ()) -> Source:
+    """{ note = N } / { cc = N }, plus the caller's option keys -> (device, "note"|"cc", N)."""
     table = typed(src, dict, where)
     unknown = table.keys() - {"note", "cc", *options}
     if unknown:
@@ -75,24 +79,24 @@ def parse_source(src: Any, where: str, options: tuple[str, ...] = ()) -> Source:
     if len(kinds) != 1:
         raise ValueError(f"{where} needs one of note = N or cc = N, got {toml(table)}")
     kind = cast(Kind, kinds[0])
-    return kind, in_range(typed(table[kind], int, f"{where} {kind}"), 0, 127, f"{where} {kind}")
+    return device, kind, in_range(typed(table[kind], int, f"{where} {kind}"), 0, 127, f"{where} {kind}")
 
 
-def midi_event(msg: mido.Message) -> MidiEvent | None:
+def midi_event(msg: mido.Message, device: str) -> MidiEvent | None:
     """Messages that can drive a mapping, None for the rest."""
     if msg.type == "control_change":
-        return MidiEvent(("cc", msg.control), msg.value, msg.value >= 64)
+        return MidiEvent((device, "cc", msg.control), msg.value, msg.value >= 64)
     if msg.type in ("note_on", "note_off"):
-        return MidiEvent(("note", msg.note), msg.velocity, msg.type == "note_on" and msg.velocity > 0)
+        return MidiEvent((device, "note", msg.note), msg.velocity, msg.type == "note_on" and msg.velocity > 0)
     return None
 
 
 def describe(msg: mido.Message) -> str:
     """Monitor line in config syntax, 1-based channel."""
-    ev = midi_event(msg)
+    ev = midi_event(msg, "")
     if ev is None:
         return str(msg)
-    kind, num = ev.src
+    _, kind, num = ev.src
     state = f"= {ev.value}" if kind == "cc" else ("press" if ev.pressed else "release")
     return f"ch{msg.channel + 1} {kind}:{num} {state}"
 

@@ -25,11 +25,21 @@ from dcsbios import (
     led_on,
     switch_state,
 )
-from midi import MidiEvent, describe, midi_event
+from midi import MidiEvent, Source, describe, midi_event
 from midi_joy import Config, dispatch, load_config
 from overlay import OverlayConfig, place
 from sound import SoundConfig
 from vjoy import VJoy, VJoyConfig, cc_to_axis, smooth
+
+MIX = "MIDI Mix"
+
+
+def note(n: int) -> Source:
+    return MIX, "note", n
+
+
+def cc(n: int) -> Source:
+    return MIX, "cc", n
 
 
 def test_cc_to_axis() -> None:
@@ -87,52 +97,60 @@ def _rejects(*bad: str) -> None:
 
 
 def test_midi_event_and_describe() -> None:
-    note = mido.Message("note_on", channel=0, note=1, velocity=127)
-    assert midi_event(note) == (("note", 1), 127, True)
-    assert midi_event(note.copy(velocity=0)) == (("note", 1), 0, False)  # note_on vel 0 = release
-    assert midi_event(mido.Message("note_off", note=1, velocity=0)) == (("note", 1), 0, False)
-    assert midi_event(mido.Message("control_change", control=64, value=64)) == (("cc", 64), 64, True)
-    assert midi_event(mido.Message("control_change", control=64, value=63)) == (("cc", 64), 63, False)
-    assert midi_event(mido.Message("pitchwheel")) is None
-    assert describe(note) == "ch1 note:1 press"
+    on = mido.Message("note_on", channel=0, note=1, velocity=127)
+    assert midi_event(on, MIX) == (note(1), 127, True)
+    assert midi_event(on.copy(velocity=0), MIX) == (note(1), 0, False)  # note_on vel 0 = release
+    assert midi_event(mido.Message("note_off", note=1, velocity=0), MIX) == (note(1), 0, False)
+    assert midi_event(mido.Message("control_change", control=64, value=64), MIX) == (cc(64), 64, True)
+    assert midi_event(mido.Message("control_change", control=64, value=63), MIX) == (cc(64), 63, False)
+    assert midi_event(mido.Message("pitchwheel"), MIX) is None
+    assert describe(on) == "ch1 note:1 press"
     assert describe(mido.Message("control_change", channel=15, control=62, value=5)) == "ch16 cc:62 = 5"
 
 
 def test_load_config() -> None:
-    c = _load('[midi]\nport = "MIDI Mix"\n[vjoy.axes]\nX = 19  # fader 1\nrz = 23\n[vjoy.buttons]\n1 = { note = 1 }\n'
-              "12 = { cc = 64 }\n")
-    assert (c.midi.port, c.midi.channel, c.vjoy.device, c.vjoy.smooth) == ("MIDI Mix", None, 1, 0.05)
-    assert c.midi.hold_s == 0.5
-    assert c.vjoy.axes == {"x": 19, "rz": 23}
-    assert c.vjoy.buttons == {1: ("note", 1), 12: ("cc", 64)}
+    c = _load('[midi."MIDI Mix"]\nchannel = 2\n[vjoy.axes."MIDI Mix"]\nX = 19  # fader 1\n[vjoy.axes.Pedals]\nrz = 23\n'
+              '[vjoy.buttons."MIDI Mix"]\n1 = { note = 1 }\n12 = { cc = 64 }\n')
+    assert (c.midi.channels, c.midi.hold_s, c.vjoy.device, c.vjoy.smooth) == ({MIX: 2}, 0.5, 1, 0.05)
+    assert c.vjoy.axes == {"x": cc(19), "rz": ("Pedals", "cc", 23)}
+    assert c.vjoy.buttons == {1: note(1), 12: cc(64)}
+    assert midi_joy.devices(c) == {MIX: 2, "Pedals": None}  # any channel without [midi."DEVICE"]
+    assert midi_joy.summary(c, MIX) == "x=cc:19 btn1=note:1 btn12=cc:64"
     assert c.dcsbios == DcsConfig({}, {})
     assert c.sound == SoundConfig((), ())  # silent without [sound]
     assert c.overlay is None  # off without [overlay]
     assert _load("[midi]\n").vjoy.axes == {}  # tables optional; main() rejects an empty mapping
     assert _load("[midi]\nhold_s = 1\n").midi.hold_s == 1.0  # an integer for a number
-    _rejects("[vjoy.axes]\nfoo = 1\n", "[vjoy.axes]\nz = 128\n", '[vjoy.axes]\nz = "62"\n', "[midi]\nchannel = 17\n",
-             "[midi]\nchannel = true\n",  # true/false isn't an integer
-             "[midi]\nport = 1\n", '[vjoy]\nsmooth = "0.1"\n', "midi = 1\n",  # not a table
-             '[vjoy.buttons]\n1 = "note:1"\n',  # old syntax
-             "[vjoy.buttons]\n1 = 1\n", "[vjoy.buttons]\n1 = {}\n", "[vjoy.buttons]\n1 = { note = 1, cc = 1 }\n",
-             "[vjoy.buttons]\n0 = { note = 1 }\n", "[vjoy.buttons]\n129 = { note = 1 }\n",
-             "[vjoy.buttons]\nx = { note = 1 }\n", "[vjoy.buttons]\n1 = { note = 1, hold = true }\n",
-             "[vjoy.buttons]\n1 = { note = 128 }\n", '[vjoy.buttons]\n1 = { note = "1" }\n',
+    ax, bt = "[vjoy.axes.M]\n", "[vjoy.buttons.M]\n"
+    _rejects(ax + "foo = 1\n", ax + "z = 128\n", ax + 'z = "62"\n', "[midi.M]\nchannel = 17\n",
+             "[midi.M]\nchannel = true\n",  # true/false isn't an integer
+             '[midi]\nport = "MIDI Mix"\n',  # old syntax, devices are tables
+             "[vjoy.axes]\nz = 62\n", "[vjoy.buttons]\n1 = { note = 1 }\n",  # no device
+             ax + "z = 1\n[vjoy.axes.N]\nZ = 2\n",  # one axis from two devices
+             bt + "1 = { note = 1 }\n[vjoy.buttons.N]\n1 = { cc = 1 }\n",
+             '[vjoy]\nsmooth = "0.1"\n', "midi = 1\n",  # not a table
+             bt + '1 = "note:1"\n',  # old syntax
+             bt + "1 = 1\n", bt + "1 = {}\n", bt + "1 = { note = 1, cc = 1 }\n",
+             bt + "0 = { note = 1 }\n", bt + "129 = { note = 1 }\n",
+             bt + "x = { note = 1 }\n", bt + "1 = { note = 1, hold = true }\n",
+             bt + "1 = { note = 128 }\n", bt + '1 = { note = "1" }\n',
              "[midi]\nhold_s = 0\n",
-             "[midi\n", "[midi]\nchannel = 1\nchannel = 2\n")  # toml syntax: unclosed table, duplicate key
+             "[midi\n", "[midi.M]\nchannel = 1\nchannel = 2\n")  # toml syntax: unclosed table, duplicate key
 
 
 def test_load_config_dcsbios() -> None:
-    f16 = "[dcsbios.F-16C_50]\n"
+    f16 = '[dcsbios.F-16C_50."MIDI Mix"]\n'
     c = _load(f16 + "anti_coll_light_knb = { cc = 17 }\nFORM_LIGHT_KNB = { cc = 18 }\nap_pitch_sw = { note = 19 }\n"
               "laser_arm_sw = { note = 18 }\n")
     assert c.dcsbios.knobs == {
-        "ANTI_COLL_LIGHT_KNB": (17, 7, "ANTI-COLL Knob", ("OFF", "1", "2", "3", "4", "A", "B", "C")),
-        "FORM_LIGHT_KNB": (18, 65535, "FORM_LIGHT_KNB", ())}  # no description: identifier
+        "ANTI_COLL_LIGHT_KNB": (cc(17), 7, "ANTI-COLL Knob", ("OFF", "1", "2", "3", "4", "A", "B", "C")),
+        "FORM_LIGHT_KNB": (cc(18), 65535, "FORM_LIGHT_KNB", ())}  # no description: identifier
     assert c.dcsbios.switches == {
-        "AP_PITCH_SW": (19, 2, 17408, 768, 8, "Autopilot PITCH Switch", ("ATT HOLD", "A/P OFF", "ALT HOLD"), None,
-                        None),
-        "LASER_ARM_SW": (18, 1, 17448, 8, 3, "LASER_ARM_SW", (), None, None)}
+        "AP_PITCH_SW": (note(19), 2, 17408, 768, 8, "Autopilot PITCH Switch", ("ATT HOLD", "A/P OFF", "ALT HOLD"),
+                        None, None),
+        "LASER_ARM_SW": (note(18), 1, 17448, 8, 3, "LASER_ARM_SW", (), None, None)}
+    two = _load(f16 + "LASER_ARM_SW = { note = 18 }\n[dcsbios.F-16C_50.Pedals]\nAP_PITCH_SW = { note = 18 }\n")
+    assert [s.src for s in two.dcsbios.switches.values()] == [note(18), ("Pedals", "note", 18)]
     def pitch(src: str) -> DcsSwitch:
         return _load(f"{f16}AP_PITCH_SW = {src}\n").dcsbios.switches["AP_PITCH_SW"]
     assert pitch("{ note = 19, hold = true }").off == 1
@@ -161,16 +179,19 @@ def test_load_config_dcsbios() -> None:
              f16 + "AP_PITCH_SW = { hold = true }\n",  # no source
              f16 + "AP_PITCH_SW = { note = 19, cc = 19 }\n",  # two sources
              f16 + "AP_PITCH_SW = {}\n",
-             "[dcsbios.A-10C]\nFOO = { cc = 1 }\n",  # no json
+             "[dcsbios.A-10C.M]\nFOO = { cc = 1 }\n",  # no json
+             "[dcsbios.F-16C_50]\nAP_PITCH_SW = { note = 19 }\n",  # no device
+             "[dcsbios.F-16C_50]\nM = 1\n",
+             f16 + "AP_PITCH_SW = { note = 19 }\n[dcsbios.F-16C_50.N]\nap_pitch_sw = { cc = 1 }\n",  # two devices
              "[dcsbios]\nF-16C_50 = 1\n",  # aircraft not a table
              f16 + "[dcsbios.A-10C]\n")  # two aircraft
 
 
 def test_label() -> None:
-    assert label(DcsControl(17, 7, "ANTI-COLL Knob", tuple("O1234ABC")), 6) == "ANTI-COLL Knob  B"
-    assert label(DcsSwitch(19, 2, 0, 0, 0, "PITCH", ()), 1) == "PITCH  1/2"  # no position names
-    assert label(DcsSwitch(19, 2, 0, 0, 0, "PITCH", ("UP", "DOWN")), 1) == "PITCH  1/2"  # names don't fit
-    assert label(DcsControl(18, 65535, "FORM", ()), 32767) == "FORM  49%"  # dial
+    assert label(DcsControl(cc(17), 7, "ANTI-COLL Knob", tuple("O1234ABC")), 6) == "ANTI-COLL Knob  B"
+    assert label(DcsSwitch(note(19), 2, 0, 0, 0, "PITCH", ()), 1) == "PITCH  1/2"  # no position names
+    assert label(DcsSwitch(note(19), 2, 0, 0, 0, "PITCH", ("UP", "DOWN")), 1) == "PITCH  1/2"  # names don't fit
+    assert label(DcsControl(cc(18), 65535, "FORM", ()), 32767) == "FORM  49%"  # dial
 
 
 def test_load_config_overlay() -> None:
@@ -199,11 +220,11 @@ class _Recorder:
 
 def test_dispatch() -> None:
     out = _Recorder()
-    callback = dispatch(2, [out])
+    callback = dispatch(MIX, 2, [out])
     callback(mido.Message("note_on", channel=1, note=1, velocity=127))
     callback(mido.Message("note_on", channel=0, note=2, velocity=127))  # other channel
     callback(mido.Message("pitchwheel", channel=1))  # not mappable
-    assert out.events == [(("note", 1), 127, True)]
+    assert out.events == [(note(1), 127, True)]
 
 
 class _FakeDll:
@@ -222,12 +243,13 @@ class _FakeDll:
 
 def test_vjoy_sends_changes_only() -> None:
     dll = _FakeDll()
-    v = VJoy(VJoyConfig(device=2, smooth=0, axes={"z": 62}, buttons={1: ("note", 22)}), cast(ctypes.CDLL, dll))
+    v = VJoy(VJoyConfig(device=2, smooth=0, axes={"z": cc(62)}, buttons={1: note(22)}), cast(ctypes.CDLL, dll))
     v.tick(0.001)
     assert dll.calls == []  # nothing received yet, nothing sent
-    v.on_midi(MidiEvent(("cc", 62), 127, True))
-    v.on_midi(MidiEvent(("note", 22), 127, True))
-    v.on_midi(MidiEvent(("cc", 63), 0, False))  # unmapped
+    v.on_midi(MidiEvent(cc(62), 127, True))
+    v.on_midi(MidiEvent(("Pedals", "cc", 62), 0, False))  # same cc, other device
+    v.on_midi(MidiEvent(note(22), 127, True))
+    v.on_midi(MidiEvent(cc(63), 0, False))  # unmapped
     v.tick(0.001)
     v.tick(0.001)  # unchanged, not resent
     assert dll.calls == [("axis0x32", 0x8000, 2), ("btn1", 1, 2)]
@@ -248,18 +270,18 @@ class _FakeSock:
 def test_dcsbios_sends_once_per_zone() -> None:
     clicks: list[None] = []
     shown: list[str] = []
-    d = DcsBios({"ANTI_COLL_LIGHT_KNB": DcsControl(17, 7, "ANTI-COLL", ()),
-                 "FORM_LIGHT_KNB": DcsControl(19, 65535, "FORM", ())},
+    d = DcsBios({"ANTI_COLL_LIGHT_KNB": DcsControl(cc(17), 7, "ANTI-COLL", ()),
+                 "FORM_LIGHT_KNB": DcsControl(cc(19), 65535, "FORM", ())},
                 lambda: clicks.append(None), shown.append)
     d.close()
     sock = _FakeSock()
     d.sock = cast(socket.socket, sock)
     for value in (0, 5, 16, 16):  # 0 and 5 share zone 0
-        d.on_midi(MidiEvent(("cc", 17), value, False))
-    d.on_midi(MidiEvent(("cc", 18), 127, True))  # unmapped
+        d.on_midi(MidiEvent(cc(17), value, False))
+    d.on_midi(MidiEvent(cc(18), 127, True))  # unmapped
     assert sock.sent == [b"ANTI_COLL_LIGHT_KNB 0\n", b"ANTI_COLL_LIGHT_KNB 1\n"]
     assert len(clicks) == 2  # one per position
-    d.on_midi(MidiEvent(("cc", 19), 64, False))
+    d.on_midi(MidiEvent(cc(19), 64, False))
     assert len(sock.sent) == 3 and len(clicks) == 2  # dials don't click
     assert shown == ["ANTI-COLL  0/7", "ANTI-COLL  1/7", "FORM  50%"]  # one per command sent
 
@@ -293,8 +315,8 @@ def test_load_config_sound() -> None:
 
 def test_export() -> None:
     mem = bytearray(0x10000)
-    pitch = DcsSwitch(19, 2, 0x4400, 0x300, 8, "PITCH", ())
-    roll = DcsSwitch(21, 2, 0x4400, 0xC00, 10, "ROLL", ())
+    pitch = DcsSwitch(note(19), 2, 0x4400, 0x300, 8, "PITCH", ())
+    roll = DcsSwitch(note(21), 2, 0x4400, 0xC00, 10, "ROLL", ())
     # sync, then two blocks: pitch up + roll down at 0x4400, something else at 0x4402
     apply_export(mem, b"\x55\x55\x55\x55" + bytes.fromhex("0044 0200 0002") + bytes.fromhex("0244 0200 ffff"))
     assert (switch_state(mem, pitch), switch_state(mem, roll)) == (2, 0)
@@ -307,7 +329,7 @@ def test_export() -> None:
 
 def test_led_on() -> None:
     def frames(state: int | None, max_value: int, off: int | None = None, dark: int | None = None) -> str:
-        sw = DcsSwitch(1, max_value, 0, 0, 0, "", (), off, dark)  # 1 s, a char per 125 ms
+        sw = DcsSwitch(note(1), max_value, 0, 0, 0, "", (), off, dark)  # 1 s, a char per 125 ms
         return "".join("1" if led_on(state, sw, (i + 0.5) * 0.125) else "0" for i in range(8))
     assert [frames(s, 2) for s in (2, 1, 0)] == ["11111111", "00000000", "11110000"]  # up solid, mid dark, down blinks
     assert [frames(s, 2, off=1) for s in (2, 1, 0)] == ["11111111", "00000000", "11110000"]  # hold, mid off: same
@@ -335,9 +357,11 @@ class _FakeExport:
 class _FakeLeds:
     def __init__(self) -> None:
         self.sent: list[tuple[int, int]] = []
+        self.channel = -1
 
     def send(self, msg: mido.Message) -> None:
         self.sent.append((msg.note, msg.velocity))
+        self.channel = msg.channel
 
     def close(self) -> None: ...
 
@@ -345,8 +369,8 @@ class _FakeLeds:
 def _switches(clicks: list[None] | None = None,
               **switches: DcsSwitch) -> tuple[DcsSwitches, _FakeExport, _FakeLeds, _FakeSock, list[str]]:
     export, leds, sock, shown, played = _FakeExport(), _FakeLeds(), _FakeSock(), list[str](), clicks
-    d = DcsSwitches(switches, cast(mido.ports.BaseOutput, leds), 0, cast(socket.socket, export), 0.5, shown.append,
-                    lambda: played.append(None) if played is not None else None)
+    d = DcsSwitches(switches, {MIX: (cast(mido.ports.BaseOutput, leds), 0)}, cast(socket.socket, export), 0.5,
+                    shown.append, lambda: played.append(None) if played is not None else None)
     d.sock.close()
     d.sock = cast(socket.socket, sock)
     return d, export, leds, sock, shown
@@ -358,12 +382,12 @@ F16 = bytes.fromhex("0000 0800") + b"F-16C_50"  # export block setting the aircr
 def test_dcsbios_switches() -> None:
     clicks: list[None] = []
     d, export, leds, sock, shown = _switches(clicks,
-                                             AP_PITCH_SW=DcsSwitch(19, 2, 0x4400, 0x300, 8, "PITCH", ("D", "M", "U")))
-    press = MidiEvent(("note", 19), 127, True)
+                                             AP_PITCH_SW=DcsSwitch(note(19), 2, 0x4400, 0x300, 8, "PITCH", ("D", "M", "U")))
+    press = MidiEvent(note(19), 127, True)
     d.tick(0.001)
     assert leds.sent == [(19, 0)]  # stale LED cleared before any DCS data
     d.on_midi(press)  # unknown state counts as mid
-    d.on_midi(MidiEvent(("note", 19), 0, False))  # release ignored
+    d.on_midi(MidiEvent(note(19), 0, False))  # release ignored
     d.tick(0.001)
     export.packets.append(F16 + bytes.fromhex("0044 0200 0002"))  # DCS: F-16, up
     d.tick(0.001)
@@ -389,8 +413,8 @@ def test_dcsbios_switches() -> None:
 
 
 def test_dcsbios_two_position_switch() -> None:
-    d, export, leds, sock, shown = _switches(LASER_ARM_SW=DcsSwitch(18, 1, 0x4428, 0x8, 3, "LASER", ()))
-    press = MidiEvent(("note", 18), 127, True)
+    d, export, leds, sock, shown = _switches(LASER_ARM_SW=DcsSwitch(note(18), 1, 0x4428, 0x8, 3, "LASER", ()))
+    press = MidiEvent(note(18), 127, True)
     d.on_midi(press)  # unknown counts as off
     d.tick(0.001)
     export.packets.append(bytes.fromhex("2844 0200 0800"))  # DCS: armed, aircraft name not seen yet
@@ -420,8 +444,8 @@ def test_dcsbios_two_position_switch() -> None:
 def test_dcsbios_hold_switch() -> None:
     clicks: list[None] = []
     d, export, leds, sock, shown = _switches(
-        clicks, AP_PITCH_SW=DcsSwitch(19, 2, 0x4400, 0x300, 8, "PITCH", ("D", "M", "U"), off=1))
-    press, release = MidiEvent(("note", 19), 127, True), MidiEvent(("note", 19), 0, False)
+        clicks, AP_PITCH_SW=DcsSwitch(note(19), 2, 0x4400, 0x300, 8, "PITCH", ("D", "M", "U"), off=1))
+    press, release = MidiEvent(note(19), 127, True), MidiEvent(note(19), 0, False)
 
     def dcs(pos: int) -> None:
         export.packets.append(bytes.fromhex(f"0044 0200 000{pos}"))
@@ -494,8 +518,8 @@ def test_dcsbios_hold_switch() -> None:
 
 
 def test_dcsbios_hold_switch_off_at_bottom() -> None:
-    d, export, leds, sock, _ = _switches(ANTI_SKID_SW=DcsSwitch(22, 2, 0x4400, 0x300, 8, "SKID", (), off=0))
-    press, release = MidiEvent(("note", 22), 127, True), MidiEvent(("note", 22), 0, False)
+    d, export, leds, sock, _ = _switches(ANTI_SKID_SW=DcsSwitch(note(22), 2, 0x4400, 0x300, 8, "SKID", (), off=0))
+    press, release = MidiEvent(note(22), 127, True), MidiEvent(note(22), 0, False)
 
     def dcs(pos: int) -> None:
         export.packets.append(bytes.fromhex(f"0044 0200 000{pos}"))
@@ -521,8 +545,23 @@ def test_dcsbios_hold_switch_off_at_bottom() -> None:
     assert leds.sent[-1] == (22, 0)
 
 
+def test_dcsbios_switches_per_device() -> None:
+    mix, pedals, sock = _FakeLeds(), _FakeLeds(), _FakeSock()
+    d = DcsSwitches({"LASER_ARM_SW": DcsSwitch(note(18), 1, 0x4428, 0x8, 3, "LASER", ()),
+                     "AP_PITCH_SW": DcsSwitch(("Pedals", "note", 18), 2, 0x4400, 0x300, 8, "PITCH", ())},
+                    {MIX: (cast(mido.ports.BaseOutput, mix), 0), "Pedals": (cast(mido.ports.BaseOutput, pedals), 3)},
+                    cast(socket.socket, _FakeExport()), 0.5)
+    d.sock.close()
+    d.sock = cast(socket.socket, sock)
+    d.on_midi(MidiEvent(("Pedals", "note", 18), 127, True))  # same note as LASER_ARM_SW, other device
+    d.tick(0.001)
+    assert sock.sent == [b"AP_PITCH_SW 2\n"]
+    assert (mix.sent, mix.channel, pedals.sent, pedals.channel) == ([(18, 0)], 0, [(18, 0)], 3)  # LED per device
+    d.close()
+
+
 def test_dcsbios_export_timeout() -> None:
-    d, export, leds, _, shown = _switches(LASER_ARM_SW=DcsSwitch(18, 1, 0x4428, 0x8, 3, "LASER", ()))
+    d, export, leds, _, shown = _switches(LASER_ARM_SW=DcsSwitch(note(18), 1, 0x4428, 0x8, 3, "LASER", ()))
     export.packets.append(F16 + bytes.fromhex("2844 0200 0800"))  # DCS: F-16, armed
     d.tick(0.001)
     d.tick(2.9)
@@ -585,6 +624,7 @@ if __name__ == "__main__":
     test_dcsbios_two_position_switch()
     test_dcsbios_hold_switch()
     test_dcsbios_hold_switch_off_at_bottom()
+    test_dcsbios_switches_per_device()
     test_dcsbios_export_timeout()
     test_main_paused()
     print("ok")

@@ -1,9 +1,10 @@
-"""vJoy output: [vjoy], [vjoy.axes] and [vjoy.buttons] tables, smoothed axes and buttons on one device."""
+"""vJoy output: [vjoy], [vjoy.axes."DEVICE"] and [vjoy.buttons."DEVICE"] tables, smoothed axes and buttons on one
+vJoy device."""
 import ctypes
 import math
 from dataclasses import dataclass
 
-from midi import MidiEvent, Source, Table, get, in_range, parse_source, typed
+from midi import MidiEvent, Source, Table, get, in_range, parse_source, toml, typed
 
 # ponytail: hardcoded default install path, add a config key if vJoy lives elsewhere
 VJOY_DLL = r"C:\Program Files\vJoy\x64\vJoyInterface.dll"
@@ -16,22 +17,31 @@ VJD_STATUS: dict[int, str] = {0: "owned by this process", 2: "busy (another feed
 class VJoyConfig:
     device: int
     smooth: float  # time constant in seconds, 0 = off
-    axes: dict[str, int]  # axis name -> cc number
+    axes: dict[str, Source]  # axis name -> cc
     buttons: dict[int, Source]  # button 1-128 -> note/cc
 
 
 def parse(cfg: Table) -> VJoyConfig:
     v = get(cfg, "vjoy", dict, {}, "")
-    axes: dict[str, int] = {}
-    for name, cc in get(v, "axes", dict, {}, "[vjoy]").items():
-        if name.lower() not in AXES:
-            raise ValueError(f"[vjoy.axes] unknown axis '{name}', valid: {' '.join(AXES)}")
-        axes[name.lower()] = in_range(typed(cc, int, f"[vjoy.axes] {name}"), 0, 127, f"[vjoy.axes] {name}")
+    axes: dict[str, Source] = {}
+    for device, table in get(v, "axes", dict, {}, "[vjoy]").items():
+        section = f"[vjoy.axes.{toml(device)}]"
+        for name, cc in typed(table, dict, section).items():
+            axis, where = name.lower(), f"{section} {name}"
+            if axis not in AXES:
+                raise ValueError(f"{section} unknown axis '{name}', valid: {' '.join(AXES)}")
+            if axis in axes:
+                raise ValueError(f"{where}: already mapped in [vjoy.axes.{toml(axes[axis][0])}]")
+            axes[axis] = (device, "cc", in_range(typed(cc, int, where), 0, 127, where))
     buttons: dict[int, Source] = {}
-    for btn, src in get(v, "buttons", dict, {}, "[vjoy]").items():
-        if not btn.isdecimal() or not 1 <= int(btn) <= 128:
-            raise ValueError(f"[vjoy.buttons] button must be 1-128, got '{btn}'")
-        buttons[int(btn)] = parse_source(src, f"[vjoy.buttons] {btn}")
+    for device, table in get(v, "buttons", dict, {}, "[vjoy]").items():
+        section = f"[vjoy.buttons.{toml(device)}]"
+        for btn, src in typed(table, dict, section).items():
+            if not btn.isdecimal() or not 1 <= int(btn) <= 128:
+                raise ValueError(f"{section} button must be 1-128, got '{btn}'")
+            if int(btn) in buttons:
+                raise ValueError(f"{section} {btn}: already mapped in [vjoy.buttons.{toml(buttons[int(btn)][0])}]")
+            buttons[int(btn)] = parse_source(src, device, f"{section} {btn}")
     return VJoyConfig(
         device=get(v, "device", int, 1, "[vjoy]"),
         smooth=get(v, "smooth", float, 0.05, "[vjoy]"),
@@ -40,9 +50,10 @@ def parse(cfg: Table) -> VJoyConfig:
     )
 
 
-def summary(conf: VJoyConfig) -> str:
-    return " ".join([f"{n}=cc:{c}" for n, c in conf.axes.items()]
-                    + [f"btn{b}={k}:{n}" for b, (k, n) in conf.buttons.items()])
+def summary(conf: VJoyConfig, device: str | None) -> str:
+    """What device drives, for the startup line."""
+    return " ".join([f"{a}=cc:{n}" for a, (d, _, n) in conf.axes.items() if d == device]
+                    + [f"btn{b}={k}:{n}" for b, (d, k, n) in conf.buttons.items() if d == device])
 
 
 def cc_to_axis(value: int) -> int:
@@ -90,8 +101,8 @@ class VJoy:
         self.btn_sent: dict[int, bool | None] = dict.fromkeys(conf.buttons)
 
     def on_midi(self, ev: MidiEvent) -> None:
-        for name, cc in self.conf.axes.items():
-            if ev.src == ("cc", cc):
+        for name, src in self.conf.axes.items():
+            if ev.src == src:
                 self.axis_target[name] = cc_to_axis(ev.value)
         for btn, src in self.conf.buttons.items():
             if ev.src == src:
