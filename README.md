@@ -15,7 +15,7 @@ Maps a MIDI controller (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS co
 ## Requirements
 
 - Python 3.10+, `pip install -r requirements.txt`
-- [vJoy](https://github.com/jshafer817/vJoy) at `C:\Program Files\vJoy` (for `[axes]` / `[buttons]`)
+- [vJoy](https://github.com/jshafer817/vJoy) at `C:\Program Files\vJoy` (for `[vjoy:axes]` / `[vjoy:buttons]`)
 - [DCS-BIOS](https://github.com/DCS-Skunkworks/dcs-bios) in `Saved Games\DCS\Scripts\DCS-BIOS` (for `[dcsbios:...]`)
 
 ## Usage
@@ -53,11 +53,11 @@ hold_s = 0.5      ; long-press threshold for hold switches
 device = 1
 smooth = 0.1      ; low-pass time constant in seconds, 0 = off
 
-[axes]            ; axis = CC number; axes: x y z rx ry rz sl0 sl1
+[vjoy:axes]       ; axis = CC number; axes: x y z rx ry rz sl0 sl1
 z = 62
 rx = 58
 
-[buttons]         ; button 1-128 = note:N | cc:N
+[vjoy:buttons]    ; button 1-128 = note:N | cc:N
 1 = note:22
 2 = cc:64
 ```

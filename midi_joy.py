@@ -132,7 +132,7 @@ def main() -> None:
         return
     outputs = open_outputs(conf)
     if not outputs:
-        raise SystemExit(f"{args.config}: nothing mapped in [axes], [buttons] or [dcsbios:AIRCRAFT]")
+        raise SystemExit(f"{args.config}: nothing mapped in [vjoy:axes], [vjoy:buttons] or [dcsbios:AIRCRAFT]")
     run(conf.midi.port, dispatch(conf.midi.channel, outputs), outputs, mapping)
 
 

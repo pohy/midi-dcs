@@ -1,4 +1,4 @@
-"""vJoy output: [vjoy], [axes] and [buttons] sections, smoothed axes and buttons on one device."""
+"""vJoy output: [vjoy], [vjoy:axes] and [vjoy:buttons] sections, smoothed axes and buttons on one device."""
 import ctypes
 import math
 from configparser import ConfigParser
@@ -23,13 +23,13 @@ class VJoyConfig:
 
 def parse(cfg: ConfigParser) -> VJoyConfig:
     axes: dict[str, int] = {}
-    for name, cc in cfg.items("axes") if cfg.has_section("axes") else []:
+    for name, cc in cfg.items("vjoy:axes") if cfg.has_section("vjoy:axes") else []:
         if name not in AXES:
             raise ValueError(f"unknown axis '{name}', valid: {' '.join(AXES)}")
-        axes[name] = in_range(int(cc), 0, 127, f"[axes] {name}")
+        axes[name] = in_range(int(cc), 0, 127, f"[vjoy:axes] {name}")
     buttons: dict[int, Source] = {}
-    for btn, src in cfg.items("buttons") if cfg.has_section("buttons") else []:
-        buttons[in_range(int(btn), 1, 128, "[buttons] button")] = parse_source(src, f"[buttons] {btn}")
+    for btn, src in cfg.items("vjoy:buttons") if cfg.has_section("vjoy:buttons") else []:
+        buttons[in_range(int(btn), 1, 128, "[vjoy:buttons] button")] = parse_source(src, f"[vjoy:buttons] {btn}")
     return VJoyConfig(
         device=cfg.getint("vjoy", "device", fallback=1),
         smooth=cfg.getfloat("vjoy", "smooth", fallback=0.05),

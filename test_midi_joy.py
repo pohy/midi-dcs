@@ -99,7 +99,7 @@ def test_midi_event_and_describe() -> None:
 
 
 def test_load_config() -> None:
-    c = _load("[midi]\nport = MIDI Mix\n[axes]\nX = 19  ; fader 1\nrz = 23\n[buttons]\n1 = note:1\n12 = CC:64\n")
+    c = _load("[midi]\nport = MIDI Mix\n[vjoy:axes]\nX = 19  ; fader 1\nrz = 23\n[vjoy:buttons]\n1 = note:1\n12 = CC:64\n")
     assert (c.midi.port, c.midi.channel, c.vjoy.device, c.vjoy.smooth) == ("MIDI Mix", None, 1, 0.05)
     assert c.midi.hold_s == 0.5
     assert c.vjoy.axes == {"x": 19, "rz": 23}
@@ -108,9 +108,9 @@ def test_load_config() -> None:
     assert c.sound == SoundConfig((), ())  # silent without [sound]
     assert c.overlay is None  # off without [overlay]
     assert _load("[midi]\n").vjoy.axes == {}  # sections optional; main() rejects an empty mapping
-    _rejects("[axes]\nfoo = 1\n", "[axes]\nz = 128\n", "[axes]\nz = abc\n", "[midi]\nchannel = 17\n",
-             "[buttons]\n1 = foo 3\n", "[buttons]\n1 = note\n", "[buttons]\n0 = note:1\n",
-             "[buttons]\n129 = note:1\n", "[buttons]\n1 = note 1\n", "[buttons]\n1 = note:1 hold\n", "[buttons]\n1 = note:128\n", "[buttons]\nx = note:1\n",
+    _rejects("[vjoy:axes]\nfoo = 1\n", "[vjoy:axes]\nz = 128\n", "[vjoy:axes]\nz = abc\n", "[midi]\nchannel = 17\n",
+             "[vjoy:buttons]\n1 = foo 3\n", "[vjoy:buttons]\n1 = note\n", "[vjoy:buttons]\n0 = note:1\n",
+             "[vjoy:buttons]\n129 = note:1\n", "[vjoy:buttons]\n1 = note 1\n", "[vjoy:buttons]\n1 = note:1 hold\n", "[vjoy:buttons]\n1 = note:128\n", "[vjoy:buttons]\nx = note:1\n",
              "[midi]\nhold_s = 0\n")
 
 
