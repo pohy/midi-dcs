@@ -74,6 +74,11 @@ MFD_L_18 = { note = 52 }
 MFD_L_19 = { note = 56 }
 MFD_L_20 = { note = 60 }
 
+MFD_L_GAIN_SW = { up = 36, down = 37 }
+MFD_L_BRT_SW = { up = 38, down = 39 }
+MFD_L_CON_SW = { up = 68, down = 69 }
+MFD_L_SYM_SW = { up = 70, down = 71 }
+
 [sound]
 knob = "resources/sfx-knob"
 knob_volume = 0.2

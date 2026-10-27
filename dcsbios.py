@@ -76,6 +76,7 @@ class DcsSwitch(NamedTuple):
     off: int | None = None  # 'hold' switch: position a long press goes to, None = cycles on every press
     dark: int | None = None  # position with the dark LED, None = off on hold switches, else second from the top
     momentary: bool = False  # push button: last position while the note is held, False = steps on every press
+    down: Source | None = None  # rocker: note holding the bottom, src holds the top, both back to the middle
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ class DcsConfig:
 
 def parse(cfg: Table, json_dir: Path) -> DcsConfig:
     """[dcsbios.AIRCRAFT."DEVICE"] IDENTIFIER = { cc = N } | { note = N, hold = true, off = OFF, dark = N,
-    latch = true } (options optional), checked against the aircraft json."""
+    latch = true } (options optional) | { up = N, down = N }, checked against the aircraft json."""
     # ponytail: one aircraft; several tables need aircraft detection from the DCS-BIOS export stream
     tables = get(cfg, "dcsbios", dict, {}, "")
     if not tables:
@@ -107,7 +108,15 @@ def parse(cfg: Table, json_dir: Path) -> DcsConfig:
             mapped = knobs.get(c["identifier"]) or switches.get(c["identifier"])
             if mapped:
                 raise ValueError(f"{where}: already mapped in [dcsbios.{aircraft}.{toml(mapped.src[0])}]")
-            source = parse_source(src, device, where, ("hold", "off", "dark", "latch"))
+            rocker = bool(typed(src, dict, where).keys() & {"up", "down"})
+            down: Source | None = None
+            if rocker:
+                if src.keys() != {"up", "down"}:
+                    raise ValueError(f"{where}: a rocker takes up = N and down = N only, got {toml(src)}")
+                source = parse_source({"note": src["up"]}, device, f"{where} up")
+                down = parse_source({"note": src["down"]}, device, f"{where} down")
+            else:
+                source = parse_source(src, device, where, ("hold", "off", "dark", "latch"))
             kind = source[1]
             name, positions = c.get("description", c["identifier"]), tuple(c.get("positions", ()))
             max_value = next((i.get("max_value") for i in c["inputs"] if i.get("interface") == "set_state"), None)
@@ -124,6 +133,8 @@ def parse(cfg: Table, json_dir: Path) -> DcsConfig:
                 raise ValueError(f"{where}: off needs hold = true")
             if latch and not push:
                 raise ValueError(f"{where}: latch is for push buttons (momentary in the DCS-BIOS json)")
+            if rocker and max_value != 2:
+                raise ValueError(f"{where}: up and down need a 3-position switch")
             if hold:
                 off = 1 if off is None else off  # middle
                 if max_value != 2 or off not in (0, 1, 2):
@@ -138,7 +149,7 @@ def parse(cfg: Table, json_dir: Path) -> DcsConfig:
             if max_value >= len(PATTERNS) or out is None:
                 raise ValueError(f"{where}: note cycles switches of up to {len(PATTERNS)} positions, use cc")
             switches[c["identifier"]] = DcsSwitch(source, max_value, out["address"], out["mask"], out["shift_by"],
-                                                  name, positions, off, dark, push and not latch)
+                                                  name, positions, off, dark, rocker or push and not latch, down)
     return DcsConfig(knobs, switches)
 
 
@@ -154,7 +165,8 @@ def _load_controls(json_dir: Path, aircraft: str, section: str) -> dict[str, _Co
 def summary(conf: DcsConfig, device: str | None) -> str:
     """What device drives, for the startup line."""
     return " ".join([f"{ident}=cc:{c.src[2]}" for ident, c in conf.knobs.items() if c.src[0] == device]
-                    + [f"{ident}=note:{s.src[2]}" for ident, s in conf.switches.items() if s.src[0] == device])
+                    + [f"{ident}=note:{s.src[2]}" + (f"/{s.down[2]}" if s.down else "")
+                       for ident, s in conf.switches.items() if s.src[0] == device])
 
 
 def cc_to_state(value: int, max_value: int) -> int:
@@ -205,6 +217,13 @@ def led_on(state: int | None, sw: DcsSwitch, clock: float) -> bool:
         order.insert(1, dark)
     pattern = PATTERNS[order.index(state)]
     return pattern[int(clock / LED_STEP_S) % len(pattern)] == "1"
+
+
+def button_leds(state: int | None, sw: DcsSwitch, clock: float) -> list[tuple[Source, bool]]:
+    """(note, LED on) for each button of the switch; a rocker side is lit while DCS holds the switch there."""
+    if sw.down is None:
+        return [(sw.src, led_on(state, sw, clock))]
+    return [(sw.src, state == sw.max_value), (sw.down, state == 0)]
 
 
 def listen() -> socket.socket:
@@ -267,9 +286,10 @@ class DcsSwitches:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.mem = bytearray(0x10000)
         self.state: dict[str, int | None] = dict.fromkeys(switches)  # None until the first export packet
-        self.led_sent: dict[str, bool | None] = dict.fromkeys(switches)
+        self.led_sent: dict[Source, bool] = {}
         self.up = dict.fromkeys(switches, True)  # travel direction of the next press
-        self.notes: deque[tuple[str, bool]] = deque()  # (ident, pressed), thread-safe append/popleft
+        # (ident, pressed, rocker down note), thread-safe append/popleft
+        self.notes: deque[tuple[str, bool, bool]] = deque()
         self.held: dict[str, float] = {}  # hold switches down, clock at the press
         # hold switch moving: (target, last position sent, clock when sent)
         self.travel: dict[str, tuple[int, int, float]] = {}
@@ -281,9 +301,11 @@ class DcsSwitches:
 
     def on_midi(self, ev: MidiEvent) -> None:
         for ident, sw in self.switches.items():
-            # releases only matter on hold switches and push buttons
+            # releases only matter on hold switches, push buttons and rockers
             if ev.src == sw.src and (ev.pressed or sw.off is not None or sw.momentary):
-                self.notes.append((ident, ev.pressed))
+                self.notes.append((ident, ev.pressed, False))
+            elif ev.src == sw.down:
+                self.notes.append((ident, ev.pressed, True))
 
     def _press(self, ident: str) -> None:
         """One position along the travel, turning around at the ends (3-position: mid, up, mid, down, mid).
@@ -302,12 +324,15 @@ class DcsSwitches:
         self.watch[ident] = self.clock + WATCH_S
         self.answered.discard(ident)
 
-    def _push(self, ident: str, pressed: bool) -> None:
-        """Push button: held down in the cockpit while the note is. No overlay, the LED shows it."""
+    def _push(self, ident: str, pressed: bool, down: bool) -> None:
+        """Push button or rocker: held in the cockpit while the note is, the top (rocker down note: the bottom),
+        back to the position below the top on release. No overlay, the LED shows it."""
         # ponytail: a tap shorter than a DCS frame sends press and release in one frame and some buttons
         # miss it; hold the release until DCS reports the press if short taps get lost
+        # ponytail: any rocker release centers, also with the other side still held
         sw = self.switches[ident]
-        self.sock.sendto(f"{ident} {sw.max_value if pressed else sw.max_value - 1}\n".encode(), ADDR)
+        position = (0 if down else sw.max_value) if pressed else sw.max_value - 1
+        self.sock.sendto(f"{ident} {position}\n".encode(), ADDR)
         if pressed:
             self.click()
 
@@ -385,9 +410,9 @@ class DcsSwitches:
                     self.show(label(sw, state))
                 self.state[ident] = state
         while self.notes:
-            ident, pressed = self.notes.popleft()
+            ident, pressed, down = self.notes.popleft()
             if self.switches[ident].momentary:
-                self._push(ident, pressed)
+                self._push(ident, pressed, down)
             elif self.switches[ident].off is None:
                 self._press(ident)
             elif pressed:
@@ -407,11 +432,11 @@ class DcsSwitches:
         for ident in list(self.travel):
             self._travel(ident)
         for ident, sw in self.switches.items():
-            on = led_on(self.state[ident], sw, self.clock)
-            if on == self.led_sent[ident]:
-                continue
-            self.led_sent[ident] = on
-            self._led(sw.src, on)
+            for src, on in button_leds(self.state[ident], sw, self.clock):
+                if on == self.led_sent.get(src):
+                    continue
+                self.led_sent[src] = on
+                self._led(src, on)
 
     def _led(self, src: Source, on: bool) -> None:
         device, _, note = src
@@ -419,8 +444,8 @@ class DcsSwitches:
         out.send(mido.Message("note_on", channel=channel, note=note, velocity=127 if on else 0))
 
     def close(self) -> None:
-        for sw in self.switches.values():
-            self._led(sw.src, False)
+        for src in self.led_sent:
+            self._led(src, False)
         for out, _ in self.leds.values():
             out.close()
         self.export.close()

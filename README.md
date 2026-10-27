@@ -9,6 +9,7 @@ Maps MIDI controllers (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS coc
 - **DCS-BIOS knobs**: CC sets a switch position (knob travel split into equal zones) or a dial value.
 - **DCS-BIOS switches**: note steps a switch of up to 5 positions; the button LED shows the position DCS reports.
 - **Push buttons**: held down in the cockpit while the note is held, or toggled per press with `latch`.
+- **Rockers**: two notes hold a spring-loaded 3-position switch up or down, centered on release.
 - **Hold switches**: 3-position switches with a long press to OFF, short press to flip between the other two.
 - **Sounds**: click on knob-driven position changes and switch presses.
 - **Overlay**: on-screen text showing control name and new position.
@@ -88,7 +89,10 @@ RF_SW = { note = 16 }
 # push button (momentary in the DCS-BIOS json): held down while the note is
 # latch = true: each press toggles it instead (pressed, released, ...)
 MASTER_CAUTION = { note = 25 }
-MFD_L_12 = { note = 72, latch = true }
+RWR_PWR_BTN = { note = 72, latch = true }
+
+# rocker: up holds the top position, down the bottom, release centers; 3-position switches only
+MFD_L_BRT_SW = { up = 31, down = 32 }
 
 # hold: long press = OFF position, short press flips between the other two (from OFF to the upper one)
 # off = 0 (bottom) to 2, omitted = 1 (middle); 3-position switches only
@@ -103,7 +107,7 @@ A note switch's LED goes to the device the note comes from, on its `channel` (1 
 
 Hold switches move one position at a time like the real switch, so up -> down passes the middle.
 
-Button LED per position, counted from the top: solid, dark, slow blink, fast blink, double flash. Hold switches: dark in OFF, solid in the upper, slow blink in the lower position. `dark` moves the dark LED to that position, the others keep their order from the top (`ANTI_SKID_SW` above: top dark, middle solid, bottom slow blink). All LEDs go dark at mission end, with no aircraft, or after 3 s without DCS-BIOS data.
+Button LED per position, counted from the top: solid, dark, slow blink, fast blink, double flash. Hold switches: dark in OFF, solid in the upper, slow blink in the lower position. `dark` moves the dark LED to that position, the others keep their order from the top (`ANTI_SKID_SW` above: top dark, middle solid, bottom slow blink). Rockers: each side lit while DCS holds the switch there. All LEDs go dark at mission end, with no aircraft, or after 3 s without DCS-BIOS data.
 
 ### Sound
 

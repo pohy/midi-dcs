@@ -79,6 +79,9 @@ FAKE_JSON = {"External Lights": {
     "MASTER_CAUTION": {"identifier": "MASTER_CAUTION", "api_variant": "momentary_last_position", "inputs": [
         {"interface": "set_state", "max_value": 1}], "outputs": [
         {"address": 17408, "mask": 32768, "max_value": 1, "shift_by": 15, "type": "integer"}]},
+    "MFD_L_BRT_SW": {"identifier": "MFD_L_BRT_SW", "description": "MFD Left BRT Rocker Switch", "inputs": [
+        {"interface": "set_state", "max_value": 2}], "outputs": [
+        {"address": 17506, "mask": 12, "max_value": 2, "shift_by": 2, "type": "integer"}]},
 }}
 
 
@@ -150,8 +153,8 @@ def test_load_config_dcsbios() -> None:
         "FORM_LIGHT_KNB": (cc(18), 65535, "FORM_LIGHT_KNB", ())}  # no description: identifier
     assert c.dcsbios.switches == {
         "AP_PITCH_SW": (note(19), 2, 17408, 768, 8, "Autopilot PITCH Switch", ("ATT HOLD", "A/P OFF", "ALT HOLD"),
-                        None, None, False),
-        "LASER_ARM_SW": (note(18), 1, 17448, 8, 3, "LASER_ARM_SW", (), None, None, False)}
+                        None, None, False, None),
+        "LASER_ARM_SW": (note(18), 1, 17448, 8, 3, "LASER_ARM_SW", (), None, None, False, None)}
     two = _load(f16 + "LASER_ARM_SW = { note = 18 }\n[dcsbios.F-16C_50.Pedals]\nAP_PITCH_SW = { note = 18 }\n")
     assert [s.src for s in two.dcsbios.switches.values()] == [note(18), ("Pedals", "note", 18)]
     def pitch(src: str) -> DcsSwitch:
@@ -167,6 +170,8 @@ def test_load_config_dcsbios() -> None:
         return _load(f"{f16}MASTER_CAUTION = {src}\n").dcsbios.switches["MASTER_CAUTION"].momentary
     assert caution("{ note = 25 }") and caution("{ note = 25, latch = false }")  # push button: momentary
     assert not caution("{ note = 25, latch = true }")
+    rocker = _load(f16 + "MFD_L_BRT_SW = { up = 31, down = 32 }\n").dcsbios.switches["MFD_L_BRT_SW"]
+    assert (rocker.src, rocker.down, rocker.max_value, rocker.momentary) == (note(31), note(32), 2, True)
     _rejects(f16 + "FOO = { cc = 1 }\n",  # unknown control
              f16 + "ANTI_COLL_LIGHT_KNB = { note = 1 }\n",  # 8 positions, notes cycle up to 5
              f16 + "ALT_BARO_SET_KNB = { cc = 1 }\n",  # no set_state input
@@ -184,6 +189,12 @@ def test_load_config_dcsbios() -> None:
              f16 + "LASER_ARM_SW = { note = 18, latch = true }\n",  # latch needs a push button
              f16 + "MASTER_CAUTION = { cc = 25, latch = true }\n",  # and a note
              f16 + "MASTER_CAUTION = { note = 25, latch = 1 }\n",
+             f16 + "MFD_L_BRT_SW = { up = 31 }\n",  # rocker needs both
+             f16 + "MFD_L_BRT_SW = { up = 31, down = 32, hold = true }\n",  # and nothing else
+             f16 + "MFD_L_BRT_SW = { up = 31, down = 32, note = 33 }\n",
+             f16 + "MFD_L_BRT_SW = { up = 31, down = 128 }\n",
+             f16 + 'MFD_L_BRT_SW = { up = 31, down = "32" }\n',
+             f16 + "LASER_ARM_SW = { up = 31, down = 32 }\n",  # needs 3 positions
              f16 + "AP_PITCH_SW = { note = 19, foo = true }\n",  # unknown option
              f16 + "AP_PITCH_SW = { note = 19, HOLD = true }\n",  # keys are lower case
              f16 + 'AP_PITCH_SW = "note:19 hold"\n',  # old syntax
@@ -472,6 +483,40 @@ def test_dcsbios_push_button() -> None:
     assert shown == ["DCS-BIOS connected  F-16C_50"]  # no overlay, the LED shows it
 
 
+def test_dcsbios_rocker() -> None:
+    clicks: list[None] = []
+    d, export, leds, sock, shown = _switches(
+        clicks, MFD_L_BRT_SW=DcsSwitch(note(31), 2, 0x4462, 0xC, 2, "BRT", (), momentary=True, down=note(32)))
+    up, down = note(31), note(32)
+
+    def dcs(pos: int) -> None:
+        export.packets.append(bytes.fromhex(f"6244 0200 0{pos * 4:x}00"))
+        d.tick(0.001)
+
+    export.packets.append(F16)
+    dcs(1)
+    assert leds.sent == [(31, 0), (32, 0)]  # centered: both dark
+    d.on_midi(MidiEvent(up, 127, True))
+    d.tick(0.001)
+    dcs(2)  # DCS: held up
+    d.on_midi(MidiEvent(up, 0, False))
+    d.tick(0.001)
+    dcs(1)
+    d.on_midi(MidiEvent(down, 127, True))
+    d.tick(0.001)
+    dcs(0)  # DCS: held down
+    d.on_midi(MidiEvent(up, 127, True))  # other side while down is still held: last press wins
+    d.on_midi(MidiEvent(up, 0, False))  # any release centers
+    d.tick(0.001)
+    assert sock.sent == [b"MFD_L_BRT_SW 2\n", b"MFD_L_BRT_SW 1\n", b"MFD_L_BRT_SW 0\n", b"MFD_L_BRT_SW 2\n",
+                         b"MFD_L_BRT_SW 1\n"]
+    assert len(clicks) == 3  # one per press
+    assert leds.sent == [(31, 0), (32, 0), (31, 127), (31, 0), (32, 127)]  # each side lit while DCS holds it
+    assert shown == ["DCS-BIOS connected  F-16C_50"]  # no overlay, the LEDs show it
+    d.close()
+    assert leds.sent[-2:] == [(31, 0), (32, 0)]
+
+
 def test_dcsbios_hold_switch() -> None:
     clicks: list[None] = []
     d, export, leds, sock, shown = _switches(
@@ -654,6 +699,7 @@ if __name__ == "__main__":
     test_dcsbios_switches()
     test_dcsbios_two_position_switch()
     test_dcsbios_push_button()
+    test_dcsbios_rocker()
     test_dcsbios_hold_switch()
     test_dcsbios_hold_switch_off_at_bottom()
     test_dcsbios_switches_per_device()
