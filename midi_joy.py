@@ -2,6 +2,7 @@
 import argparse
 import configparser
 import ctypes
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ import sound
 import vjoy
 
 TICK_S = 0.001  # output loop period
+FROZEN = getattr(sys, "frozen", False)  # running as the PyInstaller exe
 
 
 class Output(Protocol):
@@ -110,8 +112,10 @@ def run(port: str | None, callback: Callable[[mido.Message], None], outputs: lis
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", type=Path, default=Path(__file__).with_name("midi_joy.ini"),
-                   help="config file (default: midi_joy.ini next to this script)")
+    # frozen (PyInstaller): __file__ is in the temp unpack dir, the ini sits next to the exe
+    here = Path(sys.executable if FROZEN else __file__)
+    p.add_argument("--config", type=Path, default=here.with_name("midi_joy.ini"),
+                   help="config file (default: midi_joy.ini next to this script or exe)")
     p.add_argument("--list", action="store_true", help="list MIDI input ports and exit")
     p.add_argument("--monitor", action="store_true",
                    help="print incoming MIDI from the configured port in config syntax, no vJoy or DCS-BIOS")

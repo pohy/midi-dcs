@@ -27,6 +27,14 @@ python midi_joy.py              # run with midi_joy.ini next to the script
 python midi_joy.py --config other.ini
 ```
 
+## Build
+
+```
+make    # with the venv active; rebuilds when a .py changes
+```
+
+Produces `dist/midi_joy.exe`. Ship it with `midi_joy.ini` and `resources/` next to it; the exe takes the same arguments.
+
 ## Config
 
 ### MIDI
