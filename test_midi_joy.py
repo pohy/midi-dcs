@@ -1,3 +1,4 @@
+import builtins
 import ctypes
 import io
 import json
@@ -5,11 +6,13 @@ import math
 import socket
 import tempfile
 import wave
+from contextlib import redirect_stderr
 from pathlib import Path
 from typing import cast
 
 import mido
 
+import midi_joy
 from dcsbios import (
     DcsBios,
     DcsConfig,
@@ -524,6 +527,36 @@ def test_dcsbios_export_timeout() -> None:
     assert shown == ["DCS-BIOS connected  F-16C_50", "DCS-BIOS disconnected", "DCS-BIOS connected  F-16C_50"]
 
 
+def test_main_paused() -> None:
+    def outcome(error: BaseException | None) -> tuple[object, int]:
+        """Run main_paused with main raising error; return (exit code or None, Enter prompts)."""
+        def main() -> None:
+            if error:
+                raise error
+        prompts = []
+
+        def fake_input(prompt: object = "") -> str:
+            prompts.append(prompt)
+            return ""
+        orig_main, orig_input = midi_joy.main, builtins.input
+        midi_joy.main, builtins.input = main, fake_input
+        try:
+            midi_joy.main_paused()
+            return None, len(prompts)
+        except SystemExit as e:
+            return e.code, len(prompts)
+        finally:
+            midi_joy.main, builtins.input = orig_main, orig_input
+
+    with redirect_stderr(io.StringIO()) as err:
+        assert outcome(None) == (None, 0)
+        assert outcome(SystemExit(0)) == (0, 0)  # --help
+        assert outcome(SystemExit("config not found: x.ini")) == (1, 1)
+        assert outcome(SystemExit(2)) == (1, 1)  # argparse error
+        assert outcome(OSError("port busy")) == (1, 1)
+    assert "config not found: x.ini" in err.getvalue() and "OSError: port busy" in err.getvalue()
+
+
 if __name__ == "__main__":
     test_cc_to_axis()
     test_cc_to_state()
@@ -544,4 +577,5 @@ if __name__ == "__main__":
     test_dcsbios_hold_switch()
     test_dcsbios_hold_switch_off_at_bottom()
     test_dcsbios_export_timeout()
+    test_main_paused()
     print("ok")

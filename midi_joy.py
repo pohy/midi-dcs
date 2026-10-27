@@ -4,6 +4,7 @@ import configparser
 import ctypes
 import sys
 import time
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -135,5 +136,22 @@ def main() -> None:
     run(conf.midi.port, dispatch(conf.midi.channel, outputs), outputs, mapping)
 
 
+def main_paused() -> None:
+    """main() for the exe: a double-clicked console closes on exit, so wait for Enter after an error."""
+    # ponytail: also pauses when the exe fails in a terminal; GetConsoleProcessList can tell the two apart
+    try:
+        main()
+        return
+    except SystemExit as e:
+        if not e.code:
+            raise
+        if isinstance(e.code, str):
+            print(e.code, file=sys.stderr)
+    except Exception:  # noqa: BLE001 - any crash, shown before the window closes
+        traceback.print_exc()
+    input("Press Enter to exit")
+    raise SystemExit(1)
+
+
 if __name__ == "__main__":
-    main()
+    main_paused() if FROZEN else main()
