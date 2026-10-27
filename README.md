@@ -8,6 +8,7 @@ Maps MIDI controllers (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS coc
 - **vJoy buttons**: notes or CCs (>= 64 = pressed) to vJoy buttons.
 - **DCS-BIOS knobs**: CC sets a switch position (knob travel split into equal zones) or a dial value.
 - **DCS-BIOS switches**: note steps a switch of up to 5 positions; the button LED shows the position DCS reports.
+- **Push buttons**: held down in the cockpit while the note is held, or toggled per press with `latch`.
 - **Hold switches**: 3-position switches with a long press to OFF, short press to flip between the other two.
 - **Sounds**: click on knob-driven position changes and switch presses.
 - **Overlay**: on-screen text showing control name and new position.
@@ -83,6 +84,11 @@ HMCS_INT_KNB = { cc = 59 }
 # note: each press steps one position, turning around at the ends
 # 3-position: mid -> up -> mid -> down -> mid
 RF_SW = { note = 16 }
+
+# push button (momentary in the DCS-BIOS json): held down while the note is
+# latch = true: each press toggles it instead (pressed, released, ...)
+MASTER_CAUTION = { note = 25 }
+MFD_L_12 = { note = 72, latch = true }
 
 # hold: long press = OFF position, short press flips between the other two (from OFF to the upper one)
 # off = 0 (bottom) to 2, omitted = 1 (middle); 3-position switches only

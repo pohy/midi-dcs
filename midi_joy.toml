@@ -6,6 +6,9 @@ hold_s = 0.5
 [midi."MIDI Mix"]
 # channel = 1
 
+[midi."LPProMK3"]
+# channel = 0
+
 [vjoy]
 device = 1
 smooth = 0.1
@@ -14,7 +17,7 @@ smooth = 0.1
 # z = 62
 # rx = 58
 # ry = 59
-# rz = 61
+rz = 61
 
 [vjoy.buttons."MIDI Mix"]
 # 1 = { note = 1 }
@@ -44,6 +47,32 @@ ANTI_SKID_SW = { note = 22, hold = true, off = 0, dark = 1 }
 LAND_TAXI_LIGHT_SW = { note = 24, hold = true }
 UHF_FUNC_KNB = { cc = 54 }
 IFF_MASTER_KNB = { cc = 55 }
+
+[dcsbios.F-16C_50."LPProMK3"]
+# Top row
+MFD_L_1 = { note = 65 }
+MFD_L_2 = { note = 66 }
+MFD_L_3 = { note = 67 }
+MFD_L_4 = { note = 96 }
+MFD_L_5 = { note = 97 }
+# Right row
+MFD_L_6 = { note = 94 }
+MFD_L_7 = { note = 90 }
+MFD_L_8 = { note = 86 }
+MFD_L_9 = { note = 82 }
+MFD_L_10 = { note = 78 }
+# Bottom row
+MFD_L_11 = { note = 73 }
+MFD_L_12 = { note = 72 }
+MFD_L_13 = { note = 43 }
+MFD_L_14 = { note = 42 }
+MFD_L_15 = { note = 41 }
+# Left row
+MFD_L_16 = { note = 44 }
+MFD_L_17 = { note = 48 }
+MFD_L_18 = { note = 52 }
+MFD_L_19 = { note = 56 }
+MFD_L_20 = { note = 60 }
 
 [sound]
 knob = "resources/sfx-knob"

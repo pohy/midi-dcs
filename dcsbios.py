@@ -48,8 +48,9 @@ class _Output(TypedDict):  # mask and shift_by only on type "integer"
     shift_by: int
 
 
-class _Control(TypedDict, total=False):  # only description and positions are really optional
+class _Control(TypedDict, total=False):  # only description, positions and api_variant are really optional
     identifier: str
+    api_variant: str  # "momentary_last_position" on push buttons
     description: str
     positions: list[str]  # names per set_state value, on some controls only
     inputs: list[_Input]
@@ -74,6 +75,7 @@ class DcsSwitch(NamedTuple):
     positions: tuple[str, ...]
     off: int | None = None  # 'hold' switch: position a long press goes to, None = cycles on every press
     dark: int | None = None  # position with the dark LED, None = off on hold switches, else second from the top
+    momentary: bool = False  # push button: last position while the note is held, False = steps on every press
 
 
 @dataclass(frozen=True)
@@ -83,8 +85,8 @@ class DcsConfig:
 
 
 def parse(cfg: Table, json_dir: Path) -> DcsConfig:
-    """[dcsbios.AIRCRAFT."DEVICE"] IDENTIFIER = { cc = N } | { note = N, hold = true, off = OFF, dark = N } (options
-    optional), checked against the aircraft json."""
+    """[dcsbios.AIRCRAFT."DEVICE"] IDENTIFIER = { cc = N } | { note = N, hold = true, off = OFF, dark = N,
+    latch = true } (options optional), checked against the aircraft json."""
     # ponytail: one aircraft; several tables need aircraft detection from the DCS-BIOS export stream
     tables = get(cfg, "dcsbios", dict, {}, "")
     if not tables:
@@ -105,19 +107,23 @@ def parse(cfg: Table, json_dir: Path) -> DcsConfig:
             mapped = knobs.get(c["identifier"]) or switches.get(c["identifier"])
             if mapped:
                 raise ValueError(f"{where}: already mapped in [dcsbios.{aircraft}.{toml(mapped.src[0])}]")
-            source = parse_source(src, device, where, ("hold", "off", "dark"))
+            source = parse_source(src, device, where, ("hold", "off", "dark", "latch"))
             kind = source[1]
             name, positions = c.get("description", c["identifier"]), tuple(c.get("positions", ()))
             max_value = next((i.get("max_value") for i in c["inputs"] if i.get("interface") == "set_state"), None)
             if max_value is None:
                 raise ValueError(f"{where} has no set_state input")
             if kind == "cc" and len(src) > 1:
-                raise ValueError(f"{where}: hold, off and dark are for note switches, got {toml(src)}")
+                raise ValueError(f"{where}: hold, off, dark and latch are for note switches, got {toml(src)}")
             hold = get(src, "hold", bool, False, where)
             off = get(src, "off", int, None, where)
             dark = get(src, "dark", int, None, where)
+            latch = get(src, "latch", bool, False, where)
+            push = c.get("api_variant") == "momentary_last_position"
             if off is not None and not hold:
                 raise ValueError(f"{where}: off needs hold = true")
+            if latch and not push:
+                raise ValueError(f"{where}: latch is for push buttons (momentary in the DCS-BIOS json)")
             if hold:
                 off = 1 if off is None else off  # middle
                 if max_value != 2 or off not in (0, 1, 2):
@@ -132,7 +138,7 @@ def parse(cfg: Table, json_dir: Path) -> DcsConfig:
             if max_value >= len(PATTERNS) or out is None:
                 raise ValueError(f"{where}: note cycles switches of up to {len(PATTERNS)} positions, use cc")
             switches[c["identifier"]] = DcsSwitch(source, max_value, out["address"], out["mask"], out["shift_by"],
-                                                  name, positions, off, dark)
+                                                  name, positions, off, dark, push and not latch)
     return DcsConfig(knobs, switches)
 
 
@@ -275,8 +281,8 @@ class DcsSwitches:
 
     def on_midi(self, ev: MidiEvent) -> None:
         for ident, sw in self.switches.items():
-            # releases only matter on hold switches
-            if ev.src == sw.src and (ev.pressed or sw.off is not None):
+            # releases only matter on hold switches and push buttons
+            if ev.src == sw.src and (ev.pressed or sw.off is not None or sw.momentary):
                 self.notes.append((ident, ev.pressed))
 
     def _press(self, ident: str) -> None:
@@ -295,6 +301,15 @@ class DcsSwitches:
         self.click()
         self.watch[ident] = self.clock + WATCH_S
         self.answered.discard(ident)
+
+    def _push(self, ident: str, pressed: bool) -> None:
+        """Push button: held down in the cockpit while the note is. No overlay, the LED shows it."""
+        # ponytail: a tap shorter than a DCS frame sends press and release in one frame and some buttons
+        # miss it; hold the release until DCS reports the press if short taps get lost
+        sw = self.switches[ident]
+        self.sock.sendto(f"{ident} {sw.max_value if pressed else sw.max_value - 1}\n".encode(), ADDR)
+        if pressed:
+            self.click()
 
     def _toggle(self, ident: str, long: bool) -> None:
         """Hold switch: long press to off, short press to the upper of the other two positions, or the lower
@@ -371,7 +386,9 @@ class DcsSwitches:
                 self.state[ident] = state
         while self.notes:
             ident, pressed = self.notes.popleft()
-            if self.switches[ident].off is None:
+            if self.switches[ident].momentary:
+                self._push(ident, pressed)
+            elif self.switches[ident].off is None:
                 self._press(ident)
             elif pressed:
                 self.held[ident] = self.clock

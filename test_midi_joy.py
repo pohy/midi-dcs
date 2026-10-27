@@ -76,6 +76,9 @@ FAKE_JSON = {"External Lights": {
         "positions": ["ATT HOLD", "A/P OFF", "ALT HOLD"]},
     "LASER_ARM_SW": {"identifier": "LASER_ARM_SW", "inputs": [{"interface": "set_state", "max_value": 1}], "outputs": [
         {"address": 17448, "mask": 8, "max_value": 1, "shift_by": 3, "type": "integer"}]},
+    "MASTER_CAUTION": {"identifier": "MASTER_CAUTION", "api_variant": "momentary_last_position", "inputs": [
+        {"interface": "set_state", "max_value": 1}], "outputs": [
+        {"address": 17408, "mask": 32768, "max_value": 1, "shift_by": 15, "type": "integer"}]},
 }}
 
 
@@ -147,8 +150,8 @@ def test_load_config_dcsbios() -> None:
         "FORM_LIGHT_KNB": (cc(18), 65535, "FORM_LIGHT_KNB", ())}  # no description: identifier
     assert c.dcsbios.switches == {
         "AP_PITCH_SW": (note(19), 2, 17408, 768, 8, "Autopilot PITCH Switch", ("ATT HOLD", "A/P OFF", "ALT HOLD"),
-                        None, None),
-        "LASER_ARM_SW": (note(18), 1, 17448, 8, 3, "LASER_ARM_SW", (), None, None)}
+                        None, None, False),
+        "LASER_ARM_SW": (note(18), 1, 17448, 8, 3, "LASER_ARM_SW", (), None, None, False)}
     two = _load(f16 + "LASER_ARM_SW = { note = 18 }\n[dcsbios.F-16C_50.Pedals]\nAP_PITCH_SW = { note = 18 }\n")
     assert [s.src for s in two.dcsbios.switches.values()] == [note(18), ("Pedals", "note", 18)]
     def pitch(src: str) -> DcsSwitch:
@@ -159,6 +162,11 @@ def test_load_config_dcsbios() -> None:
     assert _load(f16 + "LASER_ARM_SW = { note = 18, dark = 1 }\n").dcsbios.switches["LASER_ARM_SW"].dark == 1
     hold_dark = pitch("{ note = 19, dark = 2, hold = true, off = 0 }")
     assert (hold_dark.off, hold_dark.dark) == (0, 2)
+
+    def caution(src: str) -> bool:
+        return _load(f"{f16}MASTER_CAUTION = {src}\n").dcsbios.switches["MASTER_CAUTION"].momentary
+    assert caution("{ note = 25 }") and caution("{ note = 25, latch = false }")  # push button: momentary
+    assert not caution("{ note = 25, latch = true }")
     _rejects(f16 + "FOO = { cc = 1 }\n",  # unknown control
              f16 + "ANTI_COLL_LIGHT_KNB = { note = 1 }\n",  # 8 positions, notes cycle up to 5
              f16 + "ALT_BARO_SET_KNB = { cc = 1 }\n",  # no set_state input
@@ -173,6 +181,9 @@ def test_load_config_dcsbios() -> None:
              f16 + "AP_PITCH_SW = { note = 19, dark = true }\n",
              f16 + "AP_PITCH_SW = { cc = 19, dark = 0 }\n",  # dark needs a note
              f16 + "AP_PITCH_SW = { note = 19, hold = 1 }\n",  # hold is true/false
+             f16 + "LASER_ARM_SW = { note = 18, latch = true }\n",  # latch needs a push button
+             f16 + "MASTER_CAUTION = { cc = 25, latch = true }\n",  # and a note
+             f16 + "MASTER_CAUTION = { note = 25, latch = 1 }\n",
              f16 + "AP_PITCH_SW = { note = 19, foo = true }\n",  # unknown option
              f16 + "AP_PITCH_SW = { note = 19, HOLD = true }\n",  # keys are lower case
              f16 + 'AP_PITCH_SW = "note:19 hold"\n',  # old syntax
@@ -441,6 +452,26 @@ def test_dcsbios_two_position_switch() -> None:
     assert shown == [on, "LASER  1/1", off, on, off]
 
 
+def test_dcsbios_push_button() -> None:
+    clicks: list[None] = []
+    d, export, leds, sock, shown = _switches(
+        clicks, MASTER_CAUTION=DcsSwitch(note(25), 1, 0x4400, 0x8000, 15, "CAUTION", (), momentary=True))
+    export.packets.append(F16)
+    d.tick(0.001)
+    d.on_midi(MidiEvent(note(25), 127, True))
+    d.tick(0.001)
+    export.packets.append(bytes.fromhex("0044 0200 0080"))  # DCS: pressed
+    d.tick(0.001)
+    d.on_midi(MidiEvent(note(25), 0, False))
+    d.tick(0.001)
+    export.packets.append(bytes.fromhex("0044 0200 0000"))  # DCS: released
+    d.tick(0.001)
+    assert sock.sent == [b"MASTER_CAUTION 1\n", b"MASTER_CAUTION 0\n"]  # held down while the note is
+    assert len(clicks) == 1  # on the press only
+    assert leds.sent == [(25, 0), (25, 127), (25, 0)]  # lit while DCS reports it pressed
+    assert shown == ["DCS-BIOS connected  F-16C_50"]  # no overlay, the LED shows it
+
+
 def test_dcsbios_hold_switch() -> None:
     clicks: list[None] = []
     d, export, leds, sock, shown = _switches(
@@ -622,6 +653,7 @@ if __name__ == "__main__":
     test_led_on()
     test_dcsbios_switches()
     test_dcsbios_two_position_switch()
+    test_dcsbios_push_button()
     test_dcsbios_hold_switch()
     test_dcsbios_hold_switch_off_at_bottom()
     test_dcsbios_switches_per_device()
