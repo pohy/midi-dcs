@@ -1,0 +1,57 @@
+# options and syntax: README.md
+
+[midi]
+port = "MIDI Mix"
+# channel = 1
+hold_s = 0.5
+
+[vjoy]
+device = 1
+smooth = 0.1
+
+[vjoy.axes]
+# z = 62
+# rx = 58
+# ry = 59
+# rz = 61
+
+[vjoy.buttons]
+# 1 = { note = 1 }
+# 1 = { note = 22 }
+# 2 = { note = 24 }
+3 = { note = 27 }
+
+[dcsbios.F-16C_50]
+ANTI_COLL_LIGHT_KNB = { cc = 17 }
+MASTER_LIGHT_SW = { cc = 16 }
+AP_PITCH_SW = { note = 19, hold = true }
+AP_ROLL_SW = { note = 21, hold = true }
+RF_SW = { note = 16 }
+LASER_ARM_SW = { note = 18 }
+MASTER_ARM_SW = { note = 13, hold = true, off = 0, dark = 0 }
+RWR_PWR_BTN = { note = 15 }
+MASTER_CAUTION = { note = 25 }
+ICP_HUD_BRT_KNB = { cc = 58 }
+HMCS_INT_KNB = { cc = 59 }
+ECM_PW_SW = { note = 1, hold = true, off = 0 }
+ECM_XMIT_SW = { note = 3 }
+CMDS_CH_EXP_CAT_SW = { note = 4 }
+CMDS_FL_EXP_CAT_SW = { note = 6 }
+CMDS_MODE_KNB = { cc = 22 }
+CMDS_PROG_KNB = { cc = 18 }
+ANTI_SKID_SW = { note = 22, hold = true, off = 0, dark = 1 }
+LAND_TAXI_LIGHT_SW = { note = 24, hold = true }
+UHF_FUNC_KNB = { cc = 54 }
+IFF_MASTER_KNB = { cc = 55 }
+
+[sound]
+knob = "resources/sfx-knob"
+knob_volume = 0.2
+switch = "resources/sfx-switch"
+switch_volume = 0.2
+
+[overlay]
+position = "N"
+offset_x = 0
+offset_y = 60
+timeout_s = 1.5

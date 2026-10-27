@@ -1,0 +1,9 @@
+[project]
+name = "midi-joy"
+version = "0"
+requires-python = ">=3.12"
+
+# groups, not [project] dependencies: pip installs groups without building this script folder as a package
+[dependency-groups]
+run = ["mido==1.3.3", "python-rtmidi==1.5.8"]
+dev = [{ include-group = "run" }, "mypy==2.4.0", "ruff==0.16.10", "pyinstaller==6.16.0"]

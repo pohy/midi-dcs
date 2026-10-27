@@ -1,18 +1,17 @@
-"""DCS-BIOS: [dcsbios:AIRCRAFT] section. CCs drive set_state commands over UDP; notes cycle switches of up
+"""DCS-BIOS: [dcsbios.AIRCRAFT] table. CCs drive set_state commands over UDP; notes cycle switches of up
 to 5 positions, with the switch state read back from the export stream onto the button LED."""
 import json
 import socket
 import struct
 from collections import deque
 from collections.abc import Callable
-from configparser import ConfigParser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, TypedDict
 
 import mido
 
-from midi import MidiEvent, parse_source
+from midi import MidiEvent, Table, get, parse_source, toml, typed
 
 # ponytail: default Saved Games path, add a config key if DCS lives elsewhere
 JSON_DIR = Path.home() / "Saved Games/DCS/Scripts/DCS-BIOS/doc/json"
@@ -83,70 +82,61 @@ class DcsConfig:
     switches: dict[str, DcsSwitch]
 
 
-def parse(cfg: ConfigParser, json_dir: Path) -> DcsConfig:
-    """[dcsbios:AIRCRAFT] IDENTIFIER = cc:N | note:N [hold [off:OFF]] [dark:N] in any order, checked against the
-    aircraft json."""
-    # ponytail: one aircraft; several sections need aircraft detection from the DCS-BIOS export stream
-    sections = [s for s in cfg.sections() if s.startswith("dcsbios:")]
-    if not sections:
+def parse(cfg: Table, json_dir: Path) -> DcsConfig:
+    """[dcsbios.AIRCRAFT] IDENTIFIER = { cc = N } | { note = N, hold = true, off = OFF, dark = N } (options
+    optional), checked against the aircraft json."""
+    # ponytail: one aircraft; several tables need aircraft detection from the DCS-BIOS export stream
+    tables = get(cfg, "dcsbios", dict, {}, "")
+    if not tables:
         return DcsConfig({}, {})
-    if len(sections) > 1:
-        raise ValueError(f"only one [dcsbios:AIRCRAFT] section supported, got {', '.join(sections)}")
-    section = sections[0]
-    controls = _load_controls(json_dir, section)
+    if len(tables) > 1:
+        raise ValueError(f"only one [dcsbios.AIRCRAFT] table supported, got {', '.join(tables)}")
+    [(aircraft, mappings)] = tables.items()
+    section = f"[dcsbios.{aircraft}]"
+    controls = _load_controls(json_dir, aircraft, section)
     knobs: dict[str, DcsControl] = {}
     switches: dict[str, DcsSwitch] = {}
-    for ident, src in cfg.items(section):
-        where = f"[{section}] {ident}"
+    for ident, src in typed(mappings, dict, section).items():
+        where = f"{section} {ident}"
         c = controls.get(ident.upper())
         if c is None:
-            raise ValueError(f"[{section}] unknown control '{ident}', look it up in Bort")
-        # arg[:value] in any order: one source, the rest options
-        args = src.split()
-        sources = [a for a in args if a.lower().startswith(("note:", "cc:"))]
-        opts = [a for a in args if a not in sources]
-        if len(sources) != 1:
-            raise ValueError(f"{where} needs one 'note:N' or 'cc:N', got '{src}'")
-        kind, num = parse_source(sources[0], where)
+            raise ValueError(f"{section} unknown control '{ident}', look it up in Bort")
+        kind, num = parse_source(src, where, ("hold", "off", "dark"))
         name, positions = c.get("description", c["identifier"]), tuple(c.get("positions", ()))
         max_value = next((i.get("max_value") for i in c["inputs"] if i.get("interface") == "set_state"), None)
         if max_value is None:
             raise ValueError(f"{where} has no set_state input")
-        pairs = [o.lower().partition(":") for o in opts]
-        named = {k: v for k, _, v in pairs}
-        if len(named) != len(pairs) or named.keys() - {"hold", "off", "dark"} or (named and kind == "cc"):
-            raise ValueError(f"{where}: options are 'hold', 'off:OFF' and 'dark:N' on 'note:N' switches, "
-                             f"got '{' '.join(opts)}'")
-        off = dark = None
-        if "hold" in named or "off" in named:
-            off_src = named.get("off", "1")  # middle
-            if named.get("hold") != "" or max_value != 2 or off_src not in ("0", "1", "2"):
-                raise ValueError(f"{where}: 'hold' and 'off:OFF' (0 bottom to 2, default 1) need a 3-position "
-                                 f"switch, got '{' '.join(opts)}'")
-            off = int(off_src)
-        if "dark" in named:
-            if named["dark"] not in [str(p) for p in range(max_value + 1)]:
-                raise ValueError(f"{where}: 'dark:N' takes a position from 0 (bottom) to {max_value}, "
-                                 f"got 'dark:{named['dark']}'")
-            dark = int(named["dark"])
+        if kind == "cc" and len(src) > 1:
+            raise ValueError(f"{where}: hold, off and dark are for note switches, got {toml(src)}")
+        hold = get(src, "hold", bool, False, where)
+        off = get(src, "off", int, None, where)
+        dark = get(src, "dark", int, None, where)
+        if off is not None and not hold:
+            raise ValueError(f"{where}: off needs hold = true")
+        if hold:
+            off = 1 if off is None else off  # middle
+            if max_value != 2 or off not in (0, 1, 2):
+                raise ValueError(f"{where}: hold and off (0 bottom to 2, default 1) need a 3-position switch, "
+                                 f"got {toml(src)}")
+        if dark is not None and not 0 <= dark <= max_value:
+            raise ValueError(f"{where}: dark takes a position from 0 (bottom) to {max_value}, got {dark}")
         if kind == "cc":
             knobs[c["identifier"]] = DcsControl(num, max_value, name, positions)
             continue
         out = next((o for o in c.get("outputs", []) if o["type"] == "integer"), None)
         if max_value >= len(PATTERNS) or out is None:
-            raise ValueError(f"{where}: 'note:N' cycles switches of up to {len(PATTERNS)} positions, use 'cc:N'")
+            raise ValueError(f"{where}: note cycles switches of up to {len(PATTERNS)} positions, use cc")
         switches[c["identifier"]] = DcsSwitch(num, max_value, out["address"], out["mask"], out["shift_by"],
                                               name, positions, off, dark)
     return DcsConfig(knobs, switches)
 
 
-def _load_controls(json_dir: Path, section: str) -> dict[str, _Control]:
-    """Aircraft json -> {IDENTIFIER: control}, upper-cased because configparser lower-cases keys."""
-    aircraft = section.partition(":")[2]
+def _load_controls(json_dir: Path, aircraft: str, section: str) -> dict[str, _Control]:
+    """Aircraft json -> {IDENTIFIER: control}, upper-cased so the config can spell identifiers in any case."""
     try:
         doc: dict[str, dict[str, _Control]] = json.loads((json_dir / f"{aircraft}.json").read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise ValueError(f"[{section}] no DCS-BIOS json for '{aircraft}' in {json_dir}")
+        raise ValueError(f"{section} no DCS-BIOS json for '{aircraft}' in {json_dir}")
     return {c["identifier"].upper(): c for cat in doc.values() for c in cat.values()}
 
 
@@ -358,7 +348,7 @@ class DcsSwitches:
         if fresh:
             # no cockpit: positions unknown, LEDs dark. Also dark when joining mid-mission until
             # DCS-BIOS resends the unchanged name
-            # ponytail: no check that the aircraft matches the section, another module shows
+            # ponytail: no check that the aircraft matches the config table, another module shows
             # whatever lives at these addresses; needs the module's aircraft list from its Lua file
             name = aircraft_name(self.mem)
             live = name not in NO_AIRCRAFT

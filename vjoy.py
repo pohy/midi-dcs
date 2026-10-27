@@ -1,10 +1,9 @@
-"""vJoy output: [vjoy], [vjoy:axes] and [vjoy:buttons] sections, smoothed axes and buttons on one device."""
+"""vJoy output: [vjoy], [vjoy.axes] and [vjoy.buttons] tables, smoothed axes and buttons on one device."""
 import ctypes
 import math
-from configparser import ConfigParser
 from dataclasses import dataclass
 
-from midi import MidiEvent, Source, in_range, parse_source
+from midi import MidiEvent, Source, Table, get, in_range, parse_source, typed
 
 # ponytail: hardcoded default install path, add a config key if vJoy lives elsewhere
 VJOY_DLL = r"C:\Program Files\vJoy\x64\vJoyInterface.dll"
@@ -21,18 +20,21 @@ class VJoyConfig:
     buttons: dict[int, Source]  # button 1-128 -> note/cc
 
 
-def parse(cfg: ConfigParser) -> VJoyConfig:
+def parse(cfg: Table) -> VJoyConfig:
+    v = get(cfg, "vjoy", dict, {}, "")
     axes: dict[str, int] = {}
-    for name, cc in cfg.items("vjoy:axes") if cfg.has_section("vjoy:axes") else []:
-        if name not in AXES:
-            raise ValueError(f"unknown axis '{name}', valid: {' '.join(AXES)}")
-        axes[name] = in_range(int(cc), 0, 127, f"[vjoy:axes] {name}")
+    for name, cc in get(v, "axes", dict, {}, "[vjoy]").items():
+        if name.lower() not in AXES:
+            raise ValueError(f"[vjoy.axes] unknown axis '{name}', valid: {' '.join(AXES)}")
+        axes[name.lower()] = in_range(typed(cc, int, f"[vjoy.axes] {name}"), 0, 127, f"[vjoy.axes] {name}")
     buttons: dict[int, Source] = {}
-    for btn, src in cfg.items("vjoy:buttons") if cfg.has_section("vjoy:buttons") else []:
-        buttons[in_range(int(btn), 1, 128, "[vjoy:buttons] button")] = parse_source(src, f"[vjoy:buttons] {btn}")
+    for btn, src in get(v, "buttons", dict, {}, "[vjoy]").items():
+        if not btn.isdecimal() or not 1 <= int(btn) <= 128:
+            raise ValueError(f"[vjoy.buttons] button must be 1-128, got '{btn}'")
+        buttons[int(btn)] = parse_source(src, f"[vjoy.buttons] {btn}")
     return VJoyConfig(
-        device=cfg.getint("vjoy", "device", fallback=1),
-        smooth=cfg.getfloat("vjoy", "smooth", fallback=0.05),
+        device=get(v, "device", int, 1, "[vjoy]"),
+        smooth=get(v, "smooth", float, 0.05, "[vjoy]"),
         axes=axes,
         buttons=buttons,
     )

@@ -1,13 +1,14 @@
-"""[sound] section: knob = a knob moves a DCS-BIOS switch to another position, switch = a note steps one."""
+"""[sound] table: knob = a knob moves a DCS-BIOS switch to another position, switch = a note steps one."""
 import array
 import io
 import random
 import tempfile
 import wave
 import winsound
-from configparser import ConfigParser
 from dataclasses import dataclass
 from pathlib import Path
+
+from midi import Table, get
 
 
 @dataclass(frozen=True)
@@ -16,16 +17,17 @@ class SoundConfig:
     switch: tuple[bytes, ...]
 
 
-def parse(cfg: ConfigParser, base: Path) -> SoundConfig:
-    return SoundConfig(_sounds(cfg, base, "knob"), _sounds(cfg, base, "switch"))
+def parse(cfg: Table, base: Path) -> SoundConfig:
+    s = get(cfg, "sound", dict, {}, "")
+    return SoundConfig(_sounds(s, base, "knob"), _sounds(s, base, "switch"))
 
 
-def _sounds(cfg: ConfigParser, base: Path, key: str) -> tuple[bytes, ...]:
+def _sounds(s: Table, base: Path, key: str) -> tuple[bytes, ...]:
     """key = wav file or folder of wavs (random one per sound), relative to base; key_volume = 0.0-1.0."""
-    volume = cfg.getfloat("sound", f"{key}_volume", fallback=1.0)
+    volume = get(s, f"{key}_volume", float, 1.0, "[sound]")
     if not 0 <= volume <= 1:
         raise ValueError(f"[sound] {key}_volume must be 0.0-1.0, got {volume}")
-    src = cfg.get("sound", key, fallback="")
+    src = get(s, key, str, "", "[sound]")
     if not src:
         return ()
     path = base / src

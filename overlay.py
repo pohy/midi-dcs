@@ -1,12 +1,11 @@
-"""[overlay] section: on-screen text when a knob or note moves a DCS-BIOS control or DCS-BIOS (dis)connects.
+"""[overlay] table: on-screen text when a knob or note moves a DCS-BIOS control or DCS-BIOS (dis)connects.
 Needs DCS in borderless window mode, exclusive fullscreen draws over it."""
 import ctypes
 import queue
 import tkinter as tk
-from configparser import ConfigParser
 from dataclasses import dataclass
 
-from midi import MidiEvent
+from midi import MidiEvent, Table, get
 
 # position -> where the box sits in the free space of the primary monitor, 0 = left/top, 1 = right/bottom
 ANCHORS: dict[str, tuple[float, float]] = {
@@ -35,18 +34,19 @@ class OverlayConfig:
     timeout_s: float
 
 
-def parse(cfg: ConfigParser) -> OverlayConfig | None:
-    """Off without an [overlay] section."""
-    if not cfg.has_section("overlay"):
+def parse(cfg: Table) -> OverlayConfig | None:
+    """Off without an [overlay] table."""
+    o = get(cfg, "overlay", dict, None, "")
+    if o is None:
         return None
-    position = cfg.get("overlay", "position", fallback="N").upper()
+    position = get(o, "position", str, "N", "[overlay]").upper()
     if position not in ANCHORS:
         raise ValueError(f"[overlay] position must be one of {' '.join(ANCHORS)}, got '{position}'")
-    timeout_s = cfg.getfloat("overlay", "timeout_s", fallback=1.5)
+    timeout_s = get(o, "timeout_s", float, 1.5, "[overlay]")
     if timeout_s <= 0:
         raise ValueError(f"[overlay] timeout_s must be above 0, got {timeout_s}")
-    return OverlayConfig(position, cfg.getint("overlay", "offset_x", fallback=0),
-                         cfg.getint("overlay", "offset_y", fallback=0), timeout_s)
+    return OverlayConfig(position, get(o, "offset_x", int, 0, "[overlay]"), get(o, "offset_y", int, 0, "[overlay]"),
+                         timeout_s)
 
 
 def place(conf: OverlayConfig, screen: tuple[int, int], box: tuple[int, int]) -> tuple[int, int]:

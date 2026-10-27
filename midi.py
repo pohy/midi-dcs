@@ -1,12 +1,15 @@
-"""MIDI input: [midi] section, message decoding, monitor lines, port lookup."""
-from configparser import ConfigParser
+"""MIDI input: [midi] table, message decoding, monitor lines, port lookup; config value checks for all tables."""
+import json
 from dataclasses import dataclass
-from typing import Literal, NamedTuple, TypeAlias, cast
+from typing import Any, Literal, NamedTuple, cast
 
 import mido
 
-Kind: TypeAlias = Literal["note", "cc"]
-Source: TypeAlias = tuple[Kind, int]  # ("note", 22) / ("cc", 62), as written in the config
+type Kind = Literal["note", "cc"]
+type Source = tuple[Kind, int]  # ("note", 22) / ("cc", 62), from { note = 22 } / { cc = 62 } in the config
+type Table = dict[str, Any]  # parsed toml table
+TYPE_NAMES: dict[type, str] = {str: "a string", int: "an integer", float: "a number", bool: "true or false",
+                               dict: "a table"}
 
 
 class MidiEvent(NamedTuple):
@@ -22,16 +25,38 @@ class MidiConfig:
     hold_s: float  # held at least this long = long press, on DCS-BIOS hold switches
 
 
-def parse(cfg: ConfigParser) -> MidiConfig:
-    channel = cfg.getint("midi", "channel", fallback=None)
-    hold_s = cfg.getfloat("midi", "hold_s", fallback=0.5)
+def parse(cfg: Table) -> MidiConfig:
+    m = get(cfg, "midi", dict, {}, "")
+    channel = get(m, "channel", int, None, "[midi]")
+    hold_s = get(m, "hold_s", float, 0.5, "[midi]")
     if hold_s <= 0:
         raise ValueError(f"[midi] hold_s must be above 0, got {hold_s}")
     return MidiConfig(
-        port=cfg.get("midi", "port", fallback=None) or None,
+        port=get(m, "port", str, "", "[midi]") or None,
         channel=None if channel is None else in_range(channel, 1, 16, "[midi] channel"),
         hold_s=hold_s,
     )
+
+
+def typed[T](value: Any, kind: type[T], where: str) -> T:
+    """value checked against kind; an integer is fine for a number, true/false never counts as an integer."""
+    if kind is float and type(value) is int:
+        value = float(value)
+    if type(value) is not kind:
+        raise ValueError(f"{where} must be {TYPE_NAMES[kind]}, got {toml(value)}")
+    return value  # narrowed to T by the type() check
+
+
+def toml(value: Any) -> str:
+    """value spelled as in the config, for error messages."""
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{k} = {toml(v)}" for k, v in value.items()) + " }" if value else "{}"
+    return json.dumps(value)  # true/false, "strings", numbers
+
+
+def get[T, D](table: Table, key: str, kind: type[T], default: D, where: str) -> T | D:
+    """table[key] checked against kind, default when missing; where = the table, e.g. '[midi]', '' at the top."""
+    return default if key not in table else typed(table[key], kind, f"{where} {key}".lstrip())
 
 
 def in_range(value: int, lo: int, hi: int, what: str) -> int:
@@ -40,12 +65,17 @@ def in_range(value: int, lo: int, hi: int, what: str) -> int:
     return value
 
 
-def parse_source(src: str, where: str) -> Source:
-    """'note:N' / 'cc:N' -> ("note"|"cc", N)."""
-    kind, _, num = src.lower().partition(":")
-    if kind not in ("note", "cc") or not num.isdigit():
-        raise ValueError(f"{where} must be 'note:N' or 'cc:N', got '{src}'")
-    return cast(Kind, kind), in_range(int(num), 0, 127, where)
+def parse_source(src: Any, where: str, options: tuple[str, ...] = ()) -> Source:
+    """{ note = N } / { cc = N }, plus the caller's option keys -> ("note"|"cc", N)."""
+    table = typed(src, dict, where)
+    unknown = table.keys() - {"note", "cc", *options}
+    if unknown:
+        raise ValueError(f"{where}: unknown {', '.join(sorted(unknown))}, valid: {' '.join(('note', 'cc') + options)}")
+    kinds = [k for k in ("note", "cc") if k in table]
+    if len(kinds) != 1:
+        raise ValueError(f"{where} needs one of note = N or cc = N, got {toml(table)}")
+    kind = cast(Kind, kinds[0])
+    return kind, in_range(typed(table[kind], int, f"{where} {kind}"), 0, 127, f"{where} {kind}")
 
 
 def midi_event(msg: mido.Message) -> MidiEvent | None:

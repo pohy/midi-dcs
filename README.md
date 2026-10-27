@@ -1,6 +1,6 @@
 # midi-joy
 
-Maps a MIDI controller (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS cockpit controls. Windows only. Configured in `midi_joy.ini`.
+Maps a MIDI controller (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS cockpit controls. Windows only. Configured in `midi_joy.toml`.
 
 ## Features
 
@@ -14,17 +14,17 @@ Maps a MIDI controller (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS co
 
 ## Requirements
 
-- Python 3.10+, `pip install -r requirements.txt`
-- [vJoy](https://github.com/jshafer817/vJoy) at `C:\Program Files\vJoy` (for `[vjoy:axes]` / `[vjoy:buttons]`)
-- [DCS-BIOS](https://github.com/DCS-Skunkworks/dcs-bios) in `Saved Games\DCS\Scripts\DCS-BIOS` (for `[dcsbios:...]`)
+- Python 3.12+, `pip install --group run` (pip 25.1+, `python -m pip install -U pip`); `--group dev` adds mypy, ruff and PyInstaller
+- [vJoy](https://github.com/jshafer817/vJoy) at `C:\Program Files\vJoy` (for `[vjoy.axes]` / `[vjoy.buttons]`)
+- [DCS-BIOS](https://github.com/DCS-Skunkworks/dcs-bios) in `Saved Games\DCS\Scripts\DCS-BIOS` (for `[dcsbios.AIRCRAFT]`)
 
 ## Usage
 
 ```
 python midi_joy.py --list       # list MIDI input ports
-python midi_joy.py --monitor    # print incoming MIDI in config syntax ("ch1 cc:62 = 127", "ch1 note:22 press")
-python midi_joy.py              # run with midi_joy.ini next to the script
-python midi_joy.py --config other.ini
+python midi_joy.py --monitor    # print incoming MIDI: "ch1 cc:62 = 127" maps as { cc = 62 }, "ch1 note:22 press" as { note = 22 }
+python midi_joy.py              # run with midi_joy.toml next to the script
+python midi_joy.py --config other.toml
 ```
 
 ## Build
@@ -33,82 +33,86 @@ python midi_joy.py --config other.ini
 make    # with the venv active; rebuilds when a .py changes
 ```
 
-Produces `dist/midi_joy.exe`. Ship it with `midi_joy.ini` and `resources/` next to it; the exe takes the same arguments.
+Produces `dist/midi_joy.exe`. Ship it with `midi_joy.toml` and `resources/` next to it; the exe takes the same arguments.
 
 ## Config
 
+[TOML](https://toml.io). Every table and key is optional unless noted. Strings need quotes; in paths use `/` or single quotes (`'C:\sfx'`), since `\` starts an escape in `"..."`.
+
 ### MIDI
 
-```ini
+```toml
 [midi]
-port = MIDI Mix   ; substring of the port name; omit = system default
-channel = 1       ; 1-16; omit = any channel
-hold_s = 0.5      ; long-press threshold for hold switches
+port = "MIDI Mix" # substring of the port name (see --list); omit = system default
+channel = 1       # 1-16; omit = any channel
+hold_s = 0.5      # long-press threshold for hold switches
 ```
 
 ### vJoy
 
-```ini
+```toml
 [vjoy]
 device = 1
-smooth = 0.1      ; low-pass time constant in seconds, 0 = off
+smooth = 0.1      # low-pass time constant in seconds, 0 = off
 
-[vjoy:axes]       ; axis = CC number; axes: x y z rx ry rz sl0 sl1
+[vjoy.axes]       # axis = CC number; axes: x y z rx ry rz sl0 sl1
 z = 62
 rx = 58
 
-[vjoy:buttons]    ; button 1-128 = note:N | cc:N
-1 = note:22
-2 = cc:64
+[vjoy.buttons]    # button 1-128 = { note = N } | { cc = N }
+1 = { note = 22 }
+2 = { cc = 64 }
 ```
 
 Each axis and button must be enabled in Configure vJoy.
 
 ### DCS-BIOS
 
-One `[dcsbios:AIRCRAFT]` section; `AIRCRAFT` is the JSON name in `Saved Games\DCS\Scripts\DCS-BIOS\doc\json`. Look up identifiers in Bort.
+One `[dcsbios.AIRCRAFT]` table; `AIRCRAFT` is the JSON name in `Saved Games\DCS\Scripts\DCS-BIOS\doc\json` (quote it if it has spaces: `[dcsbios."Christen Eagle II"]`). Look up identifiers in Bort.
 
-```ini
-[dcsbios:F-16C_50]
-; knob: one equal zone per switch position; dials (max 65535) map the full range
-ANTI_COLL_LIGHT_KNB = cc:17
-HMCS_INT_KNB = cc:59
+```toml
+[dcsbios.F-16C_50]
+# knob: one equal zone per switch position; dials (max 65535) map the full range
+ANTI_COLL_LIGHT_KNB = { cc = 17 }
+HMCS_INT_KNB = { cc = 59 }
 
-; note: each press steps one position, turning around at the ends
-; 3-position: mid -> up -> mid -> down -> mid
-RF_SW = note:16
+# note: each press steps one position, turning around at the ends
+# 3-position: mid -> up -> mid -> down -> mid
+RF_SW = { note = 16 }
 
-; hold: long press = OFF position, short press flips between the other two
-; off:OFF = 0 (bottom) to 2; omitted = 1 (middle); args in any order (off:0 hold note:13)
-AP_PITCH_SW = note:19 hold
-MASTER_ARM_SW = note:13 hold off:0
+# hold: long press = OFF position, short press flips between the other two (from OFF to the upper one)
+# off = 0 (bottom) to 2, omitted = 1 (middle); 3-position switches only
+AP_PITCH_SW = { note = 19, hold = true }
+MASTER_ARM_SW = { note = 13, hold = true, off = 0 }
 
-; dark:N = position with the dark LED, 0 (bottom) up; any note switch
-RF_SW = note:16 dark:2
+# dark = position with the dark LED, 0 (bottom) up; any note switch
+ANTI_SKID_SW = { note = 22, dark = 2 }
 ```
 
 Note switches need `[midi] port` set (LED output goes to the same device).
 
-Button LED per position, counted from the top: solid, dark, slow blink, fast blink, double flash. Hold switches: dark in OFF, solid in the upper, slow blink in the lower position. `dark:N` moves the dark LED to position N, the others keep their order from the top (`RF_SW` above: top dark, middle solid, bottom slow blink). All LEDs go dark at mission end, with no aircraft, or after 3 s without DCS-BIOS data.
+Hold switches move one position at a time like the real switch, so up -> down passes the middle.
+
+Button LED per position, counted from the top: solid, dark, slow blink, fast blink, double flash. Hold switches: dark in OFF, solid in the upper, slow blink in the lower position. `dark` moves the dark LED to that position, the others keep their order from the top (`ANTI_SKID_SW` above: top dark, middle solid, bottom slow blink). All LEDs go dark at mission end, with no aircraft, or after 3 s without DCS-BIOS data.
 
 ### Sound
 
-```ini
-[sound]           ; wav file, or folder = random wav each time; 16/24-bit PCM; relative to the ini; omit = silent
-knob = resources/sfx-knob     ; knob moves a switch to another position (dials stay silent)
-knob_volume = 0.2             ; 0.0-1.0
-switch = resources/sfx-switch ; every note press
+```toml
+[sound]           # wav file, or folder = random wav each time; 16/24-bit PCM; relative to the config; omit = silent
+knob = "resources/sfx-knob"     # knob moves a switch to another position (dials stay silent)
+knob_volume = 0.2               # 0.0-1.0
+switch = "resources/sfx-switch" # every note press
 switch_volume = 0.2
 ```
 
 ### Overlay
 
-```ini
-[overlay]         ; omit the section = off
-position = N      ; N NE E SE S SW W NW C
-offset_x = 0      ; pixels, + = right
-offset_y = 60     ; pixels, + = down
+```toml
+[overlay]         # omit the table = off
+position = "N"    # N NE E SE S SW W NW C
+offset_x = 0      # pixels, + = right; SW with a 20 px margin: offset_x = 20, offset_y = -20
+offset_y = 60     # pixels, + = down
 timeout_s = 1.5
 ```
 
-Shows knob moves, positions DCS reports within 1 s of a note press, and DCS-BIOS (dis)connects. Needs DCS in borderless mode (Full Screen off), primary monitor only.
+Shows knob moves (the position sent), positions DCS reports within 1 s of a note press, and DCS-BIOS (dis)connects (only with note switches mapped, they read its data). DCS changing a switch on its own doesn't show. Needs DCS in borderless mode (Full Screen off), primary monitor only.
