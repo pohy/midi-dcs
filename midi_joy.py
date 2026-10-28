@@ -96,7 +96,11 @@ def open_outputs(conf: Config) -> list[Output]:
         leds: dict[str, tuple[mido.ports.BaseOutput, int]] = {}
         for port, devs in by_port({d: dev for d, dev in devices(conf).items() if d in used and dev.leds},
                                   mido.get_output_names()).items():
-            out = mido.open_output(port)
+            try:
+                out = mido.open_output(port)
+            except OSError as e:  # not plugged in, or another app holds it
+                print(f"warning ⚠: MIDI output '{port}' not opened ({e}), no switch LEDs on it", file=sys.stderr)
+                continue
             leds |= {d: (out, (dev.channel or 1) - 1) for d, dev in devs.items()}
         switch = sound.Clicker(conf.sound.switch).play if conf.sound.switch else lambda: None
         outputs.append(dcsbios.DcsSwitches(conf.dcsbios.switches, leds, dcsbios.listen(), conf.midi.hold_s,
@@ -129,15 +133,24 @@ def monitor(devs: dict[str, midi.Device]) -> Callable[[mido.Message], None]:
 
 
 def run(inputs: dict[str | None, tuple[Callable[[mido.Message], None], str]], outputs: list[Output]) -> None:
-    """Listen on every MIDI port and tick outputs until Ctrl+C, then close them.
+    """Listen on every MIDI port that opens and tick outputs until Ctrl+C, then close them; exit when none opens.
     inputs: port name (None = system default) -> (callback, what it maps for the startup line)."""
     # py3.10 sleep() has ~15.6 ms granularity without this; reset by Windows on process exit
     ctypes.windll.winmm.timeBeginPeriod(1)
     try:
         with ExitStack() as ports:
+            listening = 0
             for port, (callback, mapping) in inputs.items():
-                midi_in = ports.enter_context(mido.open_input(port, callback=callback))
+                try:
+                    midi_in = ports.enter_context(mido.open_input(port, callback=callback))
+                except OSError as e:  # not plugged in, or another app holds it
+                    print(f"warning ⚠: MIDI port '{port or 'default'}' not opened ({e}), its mappings are off",
+                          file=sys.stderr)
+                    continue
+                listening += 1
                 print(f"listening on '{midi_in.name}' ({mapping})")
+            if not listening:
+                raise SystemExit("no MIDI port opened, --list shows the available ones")
             print("Ctrl+C to quit")
             last = time.perf_counter()
             while True:

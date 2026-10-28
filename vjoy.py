@@ -71,7 +71,10 @@ def smooth(prev: float, raw: float, dt: float, tau: float) -> float:
 
 def acquire(conf: VJoyConfig) -> ctypes.CDLL:
     """Load the driver, check the device has every mapped axis and button, take ownership."""
-    dll = ctypes.CDLL(VJOY_DLL)
+    try:
+        dll = ctypes.CDLL(VJOY_DLL)
+    except FileNotFoundError:
+        raise SystemExit(f"vJoy not installed ({VJOY_DLL})")
     if not dll.vJoyEnabled():
         raise SystemExit("vJoy driver not enabled")
     status: int = dll.GetVJDStatus(conf.device)

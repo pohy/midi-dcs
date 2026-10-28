@@ -6,13 +6,15 @@ import math
 import socket
 import tempfile
 import wave
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import mido
 
 import midi_joy
+import vjoy
 from dcsbios import (
     DcsBios,
     DcsConfig,
@@ -705,6 +707,46 @@ def test_main_paused() -> None:
     assert "config not found: x.toml" in err.getvalue() and "OSError: port busy" in err.getvalue()
 
 
+def test_missing_device_and_vjoy() -> None:
+    """A port that won't open is skipped with a warning, none opening exits; vJoy mapped without the dll exits."""
+    class Quit:  # output that stops run() on its first tick
+        closed = False
+
+        def on_midi(self, ev: MidiEvent) -> None:
+            pass
+
+        def tick(self, dt: float) -> None:
+            raise KeyboardInterrupt
+
+        def close(self) -> None:
+            self.closed = True
+
+    def open_input(port: str, callback: object) -> nullcontext[SimpleNamespace]:
+        if port == "gone":
+            raise OSError("unknown port 'gone'")
+        return nullcontext(SimpleNamespace(name="MIDI Mix 1"))
+
+    orig_open, orig_dll = mido.open_input, vjoy.VJOY_DLL
+    mido.open_input, vjoy.VJOY_DLL = open_input, str(Path(tempfile.gettempdir(), "no-vjoy", "vJoyInterface.dll"))
+    try:
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+            out = Quit()
+            midi_joy.run({"gone": (print, ""), MIX: (print, "")}, [out])
+            assert out.closed and "MIDI port 'gone' not opened" in err.getvalue()
+            try:
+                midi_joy.run({"gone": (print, "")}, [])
+                raise AssertionError("ran without a MIDI port")
+            except SystemExit as e:
+                assert "no MIDI port opened" in str(e.code)
+        try:
+            midi_joy.open_outputs(_load('[vjoy.axes."MIDI Mix"]\nz = 62'))
+            raise AssertionError("ran without vJoy")
+        except SystemExit as e:
+            assert "vJoy not installed" in str(e.code)
+    finally:
+        mido.open_input, vjoy.VJOY_DLL = orig_open, orig_dll
+
+
 if __name__ == "__main__":
     test_cc_to_axis()
     test_cc_to_state()
@@ -729,4 +771,5 @@ if __name__ == "__main__":
     test_dcsbios_switches_per_device()
     test_dcsbios_export_timeout()
     test_main_paused()
+    test_missing_device_and_vjoy()
     print("ok")

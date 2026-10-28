@@ -61,7 +61,7 @@ channel = 2
 leds = false      # no switch LED messages, the controller keeps its own colors; omit = true
 ```
 
-`DEVICE` is a substring of the port name (see `--list`), or a name with its own `port`; quote it if it has spaces or dots. Every mapping table below ends in one: `[vjoy.axes."MIDI Mix"]`, `[dcsbios.F-16C_50.mfd_left]`. Every device with a mapping or a `[midi.DEVICE]` table opens at start and must be plugged in; devices on one port share it, each gets the messages on its channel. An axis, button or DCS-BIOS control takes one device.
+`DEVICE` is a substring of the port name (see `--list`), or a name with its own `port`; quote it if it has spaces or dots. Every mapping table below ends in one: `[vjoy.axes."MIDI Mix"]`, `[dcsbios.F-16C_50.mfd_left]`. Every device with a mapping or a `[midi.DEVICE]` table opens at start; one that's unplugged or held by another app is skipped with a warning (restart to pick it up), none opening = exit. Devices on one port share it, each gets the messages on its channel. An axis, button or DCS-BIOS control takes one device.
 
 ### vJoy
 
