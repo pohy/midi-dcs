@@ -63,7 +63,7 @@ class Clicker:
 
     def __init__(self, sounds: tuple[bytes, ...]) -> None:
         # removed at interpreter exit; a sound still playing then may leave the folder behind in %TEMP%
-        self.tmp = tempfile.TemporaryDirectory(prefix="midi_joy_", ignore_cleanup_errors=True)
+        self.tmp = tempfile.TemporaryDirectory(prefix="midi_dcs_", ignore_cleanup_errors=True)
         self.files = [Path(self.tmp.name, f"click{i}.wav") for i in range(len(sounds))]
         for f, data in zip(self.files, sounds):
             f.write_bytes(data)

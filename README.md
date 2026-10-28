@@ -1,6 +1,6 @@
-# midi-joy
+# midi-dcs
 
-Maps MIDI controllers (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS cockpit controls. Windows only. Configured in `midi_joy.toml`.
+Maps MIDI controllers (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS cockpit controls. Windows only. Configured in `midi_dcs.toml`.
 
 ## Features
 
@@ -23,11 +23,11 @@ Maps MIDI controllers (e.g. Akai MIDI Mix) to vJoy axes/buttons and DCS-BIOS coc
 ## Usage
 
 ```
-python midi_joy.py --list       # list MIDI input ports
-python midi_joy.py --monitor    # print incoming MIDI from every configured device (system default port without any):
+python midi_dcs.py --list       # list MIDI input ports
+python midi_dcs.py --monitor    # print incoming MIDI from every configured device (system default port without any):
                                 # '"MIDI Mix" ch1 cc:62 = 127' maps as { cc = 62 } in a ."MIDI Mix" table, "note:22 press" as { note = 22 }
-python midi_joy.py              # run with midi_joy.toml next to the script
-python midi_joy.py --config other.toml
+python midi_dcs.py              # run with midi_dcs.toml next to the script
+python midi_dcs.py --config other.toml
 ```
 
 ## Build
@@ -36,7 +36,7 @@ python midi_joy.py --config other.toml
 make    # with the venv active; rebuilds when a .py changes
 ```
 
-Produces `dist/midi_joy.exe`. Ship it with `midi_joy.toml` and `resources/` next to it; the exe takes the same arguments.
+Produces `dist/midi_dcs.exe`. Ship it with `midi_dcs.toml` and `resources/` next to it; the exe takes the same arguments.
 
 ## Config
 

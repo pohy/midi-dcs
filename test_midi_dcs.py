@@ -13,7 +13,7 @@ from typing import cast
 
 import mido
 
-import midi_joy
+import midi_dcs
 import vjoy
 from dcsbios import (
     DcsBios,
@@ -28,7 +28,7 @@ from dcsbios import (
     switch_state,
 )
 from midi import Device, MidiEvent, Source, describe, midi_event
-from midi_joy import Config, dispatch, load_config
+from midi_dcs import Config, dispatch, load_config
 from overlay import OverlayConfig, place
 from sound import SoundConfig
 from vjoy import VJoy, VJoyConfig, cc_to_axis, smooth
@@ -124,12 +124,12 @@ def test_load_config() -> None:
         {MIX: Device(MIX, 2), "left": Device("LPProMK3", 1, False)}, 0.5, 1, 0.05)  # port defaults to the device name
     assert c.vjoy.axes == {"x": cc(19), "rz": ("Pedals", "cc", 23)}
     assert c.vjoy.buttons == {1: note(1), 12: cc(64), 2: ("left", "note", 65)}
-    assert midi_joy.devices(c) == {MIX: Device(MIX, 2), "left": Device("LPProMK3", 1, False),
+    assert midi_dcs.devices(c) == {MIX: Device(MIX, 2), "left": Device("LPProMK3", 1, False),
                                    "Pedals": Device("Pedals", None)}  # without [midi."DEVICE"]: any channel
-    assert midi_joy.summary(c, [MIX, "left"]) == "x=cc:19 btn1=note:1 btn12=cc:64 btn2=note:65"
+    assert midi_dcs.summary(c, [MIX, "left"]) == "x=cc:19 btn1=note:1 btn12=cc:64 btn2=note:65"
     # devices sharing a port open it once, matched by the port's real name
     devs = {"left": Device("LPProMK3", 1), "right": Device("LPPro", 2), MIX: Device(MIX, None)}
-    assert midi_joy.by_port(devs, ["MIDI Mix 0", "LPProMK3 MIDI 1"]) == {
+    assert midi_dcs.by_port(devs, ["MIDI Mix 0", "LPProMK3 MIDI 1"]) == {
         "LPProMK3 MIDI 1": {"left": devs["left"], "right": devs["right"]}, "MIDI Mix 0": {MIX: devs[MIX]}}
     assert c.dcsbios == DcsConfig({}, {})
     assert c.sound == SoundConfig((), ())  # silent without [sound]
@@ -265,7 +265,7 @@ def test_dispatch() -> None:
     callback(mido.Message("sysex", data=[1]))  # no channel at all
     assert out.events == [(("right", "note", 65), 127, True)]
     with redirect_stdout(io.StringIO()) as printed:
-        show = midi_joy.monitor(lp | {"any": Device("LP", None)})
+        show = midi_dcs.monitor(lp | {"any": Device("LP", None)})
         show(mido.Message("note_on", channel=1, note=65, velocity=127))
         show(mido.Message("note_on", channel=2, note=65, velocity=127))
         show(mido.Message("sysex", data=[1]))
@@ -688,15 +688,15 @@ def test_main_paused() -> None:
         def fake_input(prompt: object = "") -> str:
             prompts.append(prompt)
             return ""
-        orig_main, orig_input = midi_joy.main, builtins.input
-        midi_joy.main, builtins.input = main, fake_input
+        orig_main, orig_input = midi_dcs.main, builtins.input
+        midi_dcs.main, builtins.input = main, fake_input
         try:
-            midi_joy.main_paused()
+            midi_dcs.main_paused()
             return None, len(prompts)
         except SystemExit as e:
             return e.code, len(prompts)
         finally:
-            midi_joy.main, builtins.input = orig_main, orig_input
+            midi_dcs.main, builtins.input = orig_main, orig_input
 
     with redirect_stderr(io.StringIO()) as err:
         assert outcome(None) == (None, 0)
@@ -731,15 +731,15 @@ def test_missing_device_and_vjoy() -> None:
     try:
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
             out = Quit()
-            midi_joy.run({"gone": (print, ""), MIX: (print, "")}, [out])
+            midi_dcs.run({"gone": (print, ""), MIX: (print, "")}, [out])
             assert out.closed and "MIDI port 'gone' not opened" in err.getvalue()
             try:
-                midi_joy.run({"gone": (print, "")}, [])
+                midi_dcs.run({"gone": (print, "")}, [])
                 raise AssertionError("ran without a MIDI port")
             except SystemExit as e:
                 assert "no MIDI port opened" in str(e.code)
         try:
-            midi_joy.open_outputs(_load('[vjoy.axes."MIDI Mix"]\nz = 62'))
+            midi_dcs.open_outputs(_load('[vjoy.axes."MIDI Mix"]\nz = 62'))
             raise AssertionError("ran without vJoy")
         except SystemExit as e:
             assert "vJoy not installed" in str(e.code)

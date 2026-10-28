@@ -171,8 +171,8 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     # frozen (PyInstaller): __file__ is in the temp unpack dir, the config sits next to the exe
     here = Path(sys.executable if FROZEN else __file__)
-    p.add_argument("--config", type=Path, default=here.with_name("midi_joy.toml"),
-                   help="config file (default: midi_joy.toml next to this script or exe)")
+    p.add_argument("--config", type=Path, default=here.with_name("midi_dcs.toml"),
+                   help="config file (default: midi_dcs.toml next to this script or exe)")
     p.add_argument("--list", action="store_true", help="list MIDI input ports and exit")
     p.add_argument("--monitor", action="store_true",
                    help="print incoming MIDI from every configured device, or the system default port without any "

@@ -1,5 +1,5 @@
 [project]
-name = "midi-joy"
+name = "midi-dcs"
 version = "0"
 requires-python = ">=3.12"
 
