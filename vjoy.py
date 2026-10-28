@@ -50,7 +50,7 @@ def parse(cfg: Table) -> VJoyConfig:
     )
 
 
-def summary(conf: VJoyConfig, device: str | None) -> str:
+def summary(conf: VJoyConfig, device: str) -> str:
     """What device drives, for the startup line."""
     return " ".join([f"{a}=cc:{n}" for a, (d, _, n) in conf.axes.items() if d == device]
                     + [f"btn{b}={k}:{n}" for b, (d, k, n) in conf.buttons.items() if d == device])

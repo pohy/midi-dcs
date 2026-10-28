@@ -1,5 +1,5 @@
 """MIDI input: [midi] and [midi."DEVICE"] tables, message decoding, monitor lines, port lookup; config value checks
-for all tables."""
+for all tables. A device is a name for a port, or for some channel of one."""
 import json
 from dataclasses import dataclass
 from typing import Any, Literal, NamedTuple, cast
@@ -20,10 +20,15 @@ class MidiEvent(NamedTuple):
     pressed: bool  # note on with velocity > 0, or cc >= 64
 
 
+class Device(NamedTuple):
+    """What a device name in the mapping tables listens to; several devices can share a port on other channels."""
+    port: str  # port name or part of it, default: the device name
+    channel: int | None  # 1-16, None = any
+
+
 @dataclass(frozen=True)
 class MidiConfig:
-    # [midi."DEVICE"] tables: device (port name or part of it) -> channel 1-16, None = any
-    channels: dict[str, int | None]
+    devices: dict[str, Device]  # [midi."DEVICE"] tables
     hold_s: float  # held at least this long = long press, on DCS-BIOS hold switches
 
 
@@ -32,14 +37,15 @@ def parse(cfg: Table) -> MidiConfig:
     hold_s = get(m, "hold_s", float, 0.5, "[midi]")
     if hold_s <= 0:
         raise ValueError(f"[midi] hold_s must be above 0, got {hold_s}")
-    channels: dict[str, int | None] = {}
+    devices: dict[str, Device] = {}
     for device, table in m.items():
         if device == "hold_s":
             continue
         where = f"[midi.{toml(device)}]"
         channel = get(typed(table, dict, where), "channel", int, None, where)
-        channels[device] = None if channel is None else in_range(channel, 1, 16, f"{where} channel")
-    return MidiConfig(channels, hold_s)
+        devices[device] = Device(get(table, "port", str, device, where),
+                                 None if channel is None else in_range(channel, 1, 16, f"{where} channel"))
+    return MidiConfig(devices, hold_s)
 
 
 def typed[T](value: Any, kind: type[T], where: str) -> T:
@@ -101,8 +107,6 @@ def describe(msg: mido.Message) -> str:
     return f"ch{msg.channel + 1} {kind}:{num} {state}"
 
 
-def find_port(port: str | None, names: list[str]) -> str | None:
+def find_port(port: str, names: list[str]) -> str:
     """rtmidi appends a shifting index to port names ("MIDI Mix 3"), so match substrings."""
-    if port is None:
-        return None
     return next((n for n in names if port in n), port)

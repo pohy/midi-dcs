@@ -50,9 +50,17 @@ hold_s = 0.5      # long-press threshold for hold switches
 
 [midi."MIDI Mix"] # per device, optional
 channel = 1       # 1-16; omit = any channel
+
+[midi.mfd_left]   # a name for one channel of a port
+port = "LPProMK3" # substring of the port name; omit = the device name
+channel = 1
+
+[midi.mfd_right]  # same port, other channel (e.g. Launchpad custom modes)
+port = "LPProMK3"
+channel = 2
 ```
 
-`DEVICE` is a substring of the port name (see `--list`), quoted if it has spaces or dots. Every mapping table below ends in one: `[vjoy.axes."MIDI Mix"]`, `[dcsbios.F-16C_50."X-Touch Mini"]`. Every device with a mapping or a `[midi.DEVICE]` table opens at start and must be plugged in. An axis, button or DCS-BIOS control takes one device.
+`DEVICE` is a substring of the port name (see `--list`), or a name with its own `port`; quote it if it has spaces or dots. Every mapping table below ends in one: `[vjoy.axes."MIDI Mix"]`, `[dcsbios.F-16C_50.mfd_left]`. Every device with a mapping or a `[midi.DEVICE]` table opens at start and must be plugged in; devices on one port share it, each gets the messages on its channel. An axis, button or DCS-BIOS control takes one device.
 
 ### vJoy
 

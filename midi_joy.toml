@@ -6,8 +6,16 @@ hold_s = 0.5
 [midi."MIDI Mix"]
 # channel = 1
 
-[midi."LPProMK3"]
-# channel = 0
+# [midi."LPProMK3"]
+# # channel = 0
+
+[midi.lpp_mfd_left]
+port = "LPProMK3"
+channel = 1
+
+[midi.lpp_mfd_right]
+port = "LPProMK3"
+channel = 2
 
 [vjoy]
 device = 1
@@ -48,7 +56,7 @@ LAND_TAXI_LIGHT_SW = { note = 24, hold = true }
 UHF_FUNC_KNB = { cc = 54 }
 IFF_MASTER_KNB = { cc = 55 }
 
-[dcsbios.F-16C_50."LPProMK3"]
+[dcsbios.F-16C_50.lpp_mfd_left]
 # Top row
 MFD_L_1 = { note = 65 }
 MFD_L_2 = { note = 66 }
@@ -78,6 +86,37 @@ MFD_L_GAIN_SW = { up = 36, down = 37 }
 MFD_L_BRT_SW = { up = 38, down = 39 }
 MFD_L_CON_SW = { up = 68, down = 69 }
 MFD_L_SYM_SW = { up = 70, down = 71 }
+
+[dcsbios.F-16C_50.lpp_mfd_right]
+# Top row
+MFD_R_1 = { note = 65 }
+MFD_R_2 = { note = 66 }
+MFD_R_3 = { note = 67 }
+MFD_R_4 = { note = 96 }
+MFD_R_5 = { note = 97 }
+# Right row
+MFD_R_6 = { note = 94 }
+MFD_R_7 = { note = 90 }
+MFD_R_8 = { note = 86 }
+MFD_R_9 = { note = 82 }
+MFD_R_10 = { note = 78 }
+# Bottom row
+MFD_R_11 = { note = 73 }
+MFD_R_12 = { note = 72 }
+MFD_R_13 = { note = 43 }
+MFD_R_14 = { note = 42 }
+MFD_R_15 = { note = 41 }
+# Left row
+MFD_R_16 = { note = 44 }
+MFD_R_17 = { note = 48 }
+MFD_R_18 = { note = 52 }
+MFD_R_19 = { note = 56 }
+MFD_R_20 = { note = 60 }
+
+MFD_R_GAIN_SW = { up = 36, down = 37 }
+MFD_R_BRT_SW = { up = 38, down = 39 }
+MFD_R_CON_SW = { up = 68, down = 69 }
+MFD_R_SYM_SW = { up = 70, down = 71 }
 
 [sound]
 knob = "resources/sfx-knob"

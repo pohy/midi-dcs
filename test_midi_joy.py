@@ -6,7 +6,7 @@ import math
 import socket
 import tempfile
 import wave
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import cast
 
@@ -25,7 +25,7 @@ from dcsbios import (
     led_on,
     switch_state,
 )
-from midi import MidiEvent, Source, describe, midi_event
+from midi import Device, MidiEvent, Source, describe, midi_event
 from midi_joy import Config, dispatch, load_config
 from overlay import OverlayConfig, place
 from sound import SoundConfig
@@ -115,13 +115,20 @@ def test_midi_event_and_describe() -> None:
 
 
 def test_load_config() -> None:
-    c = _load('[midi."MIDI Mix"]\nchannel = 2\n[vjoy.axes."MIDI Mix"]\nX = 19  # fader 1\n[vjoy.axes.Pedals]\nrz = 23\n'
-              '[vjoy.buttons."MIDI Mix"]\n1 = { note = 1 }\n12 = { cc = 64 }\n')
-    assert (c.midi.channels, c.midi.hold_s, c.vjoy.device, c.vjoy.smooth) == ({MIX: 2}, 0.5, 1, 0.05)
+    c = _load('[midi."MIDI Mix"]\nchannel = 2\n[midi.left]\nport = "LPProMK3"\nchannel = 1\n'
+              '[vjoy.axes."MIDI Mix"]\nX = 19  # fader 1\n[vjoy.axes.Pedals]\nrz = 23\n'
+              '[vjoy.buttons."MIDI Mix"]\n1 = { note = 1 }\n12 = { cc = 64 }\n[vjoy.buttons.left]\n2 = { note = 65 }\n')
+    assert (c.midi.devices, c.midi.hold_s, c.vjoy.device, c.vjoy.smooth) == (
+        {MIX: Device(MIX, 2), "left": Device("LPProMK3", 1)}, 0.5, 1, 0.05)  # port defaults to the device name
     assert c.vjoy.axes == {"x": cc(19), "rz": ("Pedals", "cc", 23)}
-    assert c.vjoy.buttons == {1: note(1), 12: cc(64)}
-    assert midi_joy.devices(c) == {MIX: 2, "Pedals": None}  # any channel without [midi."DEVICE"]
-    assert midi_joy.summary(c, MIX) == "x=cc:19 btn1=note:1 btn12=cc:64"
+    assert c.vjoy.buttons == {1: note(1), 12: cc(64), 2: ("left", "note", 65)}
+    assert midi_joy.devices(c) == {MIX: Device(MIX, 2), "left": Device("LPProMK3", 1),
+                                   "Pedals": Device("Pedals", None)}  # without [midi."DEVICE"]: any channel
+    assert midi_joy.summary(c, [MIX, "left"]) == "x=cc:19 btn1=note:1 btn12=cc:64 btn2=note:65"
+    # devices sharing a port open it once, matched by the port's real name
+    devs = {"left": Device("LPProMK3", 1), "right": Device("LPPro", 2), MIX: Device(MIX, None)}
+    assert midi_joy.by_port(devs, ["MIDI Mix 0", "LPProMK3 MIDI 1"]) == {
+        "LPProMK3 MIDI 1": {"left": devs["left"], "right": devs["right"]}, "MIDI Mix 0": {MIX: devs[MIX]}}
     assert c.dcsbios == DcsConfig({}, {})
     assert c.sound == SoundConfig((), ())  # silent without [sound]
     assert c.overlay is None  # off without [overlay]
@@ -242,11 +249,25 @@ class _Recorder:
 
 def test_dispatch() -> None:
     out = _Recorder()
-    callback = dispatch(MIX, 2, [out])
+    callback = dispatch({MIX: Device(MIX, 2)}, [out])
     callback(mido.Message("note_on", channel=1, note=1, velocity=127))
     callback(mido.Message("note_on", channel=0, note=2, velocity=127))  # other channel
     callback(mido.Message("pitchwheel", channel=1))  # not mappable
     assert out.events == [(note(1), 127, True)]
+    out = _Recorder()
+    lp = {"left": Device("LP", 1), "right": Device("LP", 2)}  # one port, a device per channel
+    callback = dispatch(lp, [out])
+    callback(mido.Message("note_on", channel=1, note=65, velocity=127))
+    callback(mido.Message("note_on", channel=2, note=65, velocity=127))  # no device on ch3
+    callback(mido.Message("sysex", data=[1]))  # no channel at all
+    assert out.events == [(("right", "note", 65), 127, True)]
+    with redirect_stdout(io.StringIO()) as printed:
+        show = midi_joy.monitor(lp | {"any": Device("LP", None)})
+        show(mido.Message("note_on", channel=1, note=65, velocity=127))
+        show(mido.Message("note_on", channel=2, note=65, velocity=127))
+        show(mido.Message("sysex", data=[1]))
+    assert printed.getvalue().splitlines() == ['"right" "any" ch2 note:65 press', '"any" ch3 note:65 press',
+                                               "sysex data=(1) time=0"]
 
 
 class _FakeDll:

@@ -5,7 +5,7 @@ import sys
 import time
 import tomllib
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,15 +57,25 @@ def load_config(path: Path, json_dir: Path = dcsbios.JSON_DIR) -> Config:
         raise SystemExit(f"{path}: {e}")
 
 
-def devices(conf: Config) -> dict[str, int | None]:
-    """Every device with a [midi."DEVICE"] table or something mapped -> its channel."""
+def devices(conf: Config) -> dict[str, midi.Device]:
+    """Every device with a [midi."DEVICE"] table or something mapped; without a table, the port of that name."""
     srcs = [*conf.vjoy.axes.values(), *conf.vjoy.buttons.values(),
             *(c.src for c in conf.dcsbios.knobs.values()), *(s.src for s in conf.dcsbios.switches.values())]
-    return conf.midi.channels | {d: conf.midi.channels.get(d) for d, _, _ in srcs}
+    return conf.midi.devices | {d: conf.midi.devices.get(d, midi.Device(d, None)) for d, _, _ in srcs}
 
 
-def summary(conf: Config, device: str | None) -> str:
-    return " ".join(filter(None, [vjoy.summary(conf.vjoy, device), dcsbios.summary(conf.dcsbios, device)]))
+def by_port(devs: dict[str, midi.Device], names: list[str]) -> dict[str | None, dict[str, midi.Device]]:
+    """Devices grouped by the port name they match, so each port opens once."""
+    ports: dict[str | None, dict[str, midi.Device]] = {}
+    for d, dev in devs.items():
+        ports.setdefault(midi.find_port(dev.port, names), {})[d] = dev
+    return ports
+
+
+def summary(conf: Config, devs: Iterable[str]) -> str:
+    """What the devices map, for the startup line."""
+    return " ".join(filter(None, [s for d in devs for s in (vjoy.summary(conf.vjoy, d),
+                                                              dcsbios.summary(conf.dcsbios, d))]))
 
 
 def open_outputs(conf: Config) -> list[Output]:
@@ -81,45 +91,52 @@ def open_outputs(conf: Config) -> list[Output]:
         knob = sound.Clicker(conf.sound.knob).play if conf.sound.knob else lambda: None
         outputs.append(dcsbios.DcsBios(conf.dcsbios.knobs, knob, show))
     if conf.dcsbios.switches:
-        names = mido.get_output_names()
-        # LEDs on the device the note comes from, on its channel
-        leds = {d: (mido.open_output(midi.find_port(d, names)), (conf.midi.channels.get(d) or 1) - 1)
-                for d in {s.src[0] for s in conf.dcsbios.switches.values()}}
+        # LEDs on the device the note comes from, on its channel; devices on one port share its output
+        used = {s.src[0] for s in conf.dcsbios.switches.values()}
+        leds: dict[str, tuple[mido.ports.BaseOutput, int]] = {}
+        for port, devs in by_port({d: dev for d, dev in devices(conf).items() if d in used},
+                                  mido.get_output_names()).items():
+            out = mido.open_output(port)
+            leds |= {d: (out, (dev.channel or 1) - 1) for d, dev in devs.items()}
         switch = sound.Clicker(conf.sound.switch).play if conf.sound.switch else lambda: None
         outputs.append(dcsbios.DcsSwitches(conf.dcsbios.switches, leds, dcsbios.listen(), conf.midi.hold_s,
                                            show, switch))
     return outputs
 
 
-def dispatch(device: str, channel: int | None, outputs: list[Output]) -> Callable[[mido.Message], None]:
-    """MIDI callback of one device: drop unmappable messages and other channels, hand the rest to every output."""
+def dispatch(devs: dict[str, midi.Device], outputs: list[Output]) -> Callable[[mido.Message], None]:
+    """MIDI callback of one port: drop unmappable messages, hand the rest to every output as coming from each
+    device whose channel it's on."""
     def callback(msg: mido.Message) -> None:
-        ev = midi.midi_event(msg, device)
-        if ev is None:
-            return
-        if channel is not None and msg.channel != channel - 1:
-            return
-        for out in outputs:
-            out.on_midi(ev)
+        for device, (_, channel) in devs.items():
+            ev = midi.midi_event(msg, device)
+            if ev is None:
+                return
+            if channel is not None and msg.channel != channel - 1:
+                continue
+            for out in outputs:
+                out.on_midi(ev)
     return callback
 
 
-def monitor(device: str | None) -> Callable[[mido.Message], None]:
-    """--monitor callback: every message in config syntax, after the device it came from."""
-    prefix = "" if device is None else f"{midi.toml(device)} "
-    return lambda msg: print(prefix + midi.describe(msg))
+def monitor(devs: dict[str, midi.Device]) -> Callable[[mido.Message], None]:
+    """--monitor callback of one port: every message in config syntax, after the devices whose channel it's on."""
+    def callback(msg: mido.Message) -> None:
+        names = [midi.toml(d) for d, (_, ch) in devs.items()
+                 if midi.midi_event(msg, d) is not None and (ch is None or msg.channel == ch - 1)]
+        print(" ".join([*names, midi.describe(msg)]))
+    return callback
 
 
 def run(inputs: dict[str | None, tuple[Callable[[mido.Message], None], str]], outputs: list[Output]) -> None:
     """Listen on every MIDI port and tick outputs until Ctrl+C, then close them.
-    inputs: port (None = system default) -> (callback, what it maps for the startup line)."""
+    inputs: port name (None = system default) -> (callback, what it maps for the startup line)."""
     # py3.10 sleep() has ~15.6 ms granularity without this; reset by Windows on process exit
     ctypes.windll.winmm.timeBeginPeriod(1)
     try:
         with ExitStack() as ports:
-            names = mido.get_input_names()
             for port, (callback, mapping) in inputs.items():
-                midi_in = ports.enter_context(mido.open_input(midi.find_port(port, names), callback=callback))
+                midi_in = ports.enter_context(mido.open_input(port, callback=callback))
                 print(f"listening on '{midi_in.name}' ({mapping})")
             print("Ctrl+C to quit")
             last = time.perf_counter()
@@ -153,16 +170,16 @@ def main() -> None:
         print("\n".join(mido.get_input_names()) or "no MIDI input ports")
         return
     conf = load_config(args.config)
-    channels = devices(conf)
+    ports = by_port(devices(conf), mido.get_input_names())
     if args.monitor:
-        ports: list[str | None] = [*channels] or [None]
-        run({d: (monitor(d), summary(conf, d)) for d in ports}, [])
+        ports = ports or {None: {}}  # no devices: the system default port
+        run({p: (monitor(devs), summary(conf, devs)) for p, devs in ports.items()}, [])
         return
     outputs = open_outputs(conf)
     if not outputs:
         raise SystemExit(f'{args.config}: nothing mapped in [vjoy.axes."DEVICE"], [vjoy.buttons."DEVICE"] or '
                          f'[dcsbios.AIRCRAFT."DEVICE"]')
-    run({d: (dispatch(d, ch, outputs), summary(conf, d)) for d, ch in channels.items()}, outputs)
+    run({p: (dispatch(devs, outputs), summary(conf, devs)) for p, devs in ports.items()}, outputs)
 
 
 def main_paused() -> None:

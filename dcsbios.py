@@ -162,7 +162,7 @@ def _load_controls(json_dir: Path, aircraft: str, section: str) -> dict[str, _Co
     return {c["identifier"].upper(): c for cat in doc.values() for c in cat.values()}
 
 
-def summary(conf: DcsConfig, device: str | None) -> str:
+def summary(conf: DcsConfig, device: str) -> str:
     """What device drives, for the startup line."""
     return " ".join([f"{ident}=cc:{c.src[2]}" for ident, c in conf.knobs.items() if c.src[0] == device]
                     + [f"{ident}=note:{s.src[2]}" + (f"/{s.down[2]}" if s.down else "")
