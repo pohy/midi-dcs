@@ -281,7 +281,8 @@ class DcsSwitches:
         self.hold_s = hold_s  # long press on hold switches
         self.show = show  # overlay text on (dis)connects and on positions DCS reports right after a press
         self.click = click  # on every press, also when DCS then refuses the move
-        self.leds = leds  # device -> (MIDI output, 0-based channel the LED note_on goes out on)
+        # device -> (MIDI output, 0-based channel the LED note_on goes out on); devices missing here get no LEDs
+        self.leds = leds
         self.export = export
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.mem = bytearray(0x10000)
@@ -440,6 +441,8 @@ class DcsSwitches:
 
     def _led(self, src: Source, on: bool) -> None:
         device, _, note = src
+        if device not in self.leds:
+            return  # leds = false
         out, channel = self.leds[device]
         out.send(mido.Message("note_on", channel=channel, note=note, velocity=127 if on else 0))
 

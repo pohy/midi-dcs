@@ -115,14 +115,14 @@ def test_midi_event_and_describe() -> None:
 
 
 def test_load_config() -> None:
-    c = _load('[midi."MIDI Mix"]\nchannel = 2\n[midi.left]\nport = "LPProMK3"\nchannel = 1\n'
+    c = _load('[midi."MIDI Mix"]\nchannel = 2\n[midi.left]\nport = "LPProMK3"\nchannel = 1\nleds = false\n'
               '[vjoy.axes."MIDI Mix"]\nX = 19  # fader 1\n[vjoy.axes.Pedals]\nrz = 23\n'
               '[vjoy.buttons."MIDI Mix"]\n1 = { note = 1 }\n12 = { cc = 64 }\n[vjoy.buttons.left]\n2 = { note = 65 }\n')
     assert (c.midi.devices, c.midi.hold_s, c.vjoy.device, c.vjoy.smooth) == (
-        {MIX: Device(MIX, 2), "left": Device("LPProMK3", 1)}, 0.5, 1, 0.05)  # port defaults to the device name
+        {MIX: Device(MIX, 2), "left": Device("LPProMK3", 1, False)}, 0.5, 1, 0.05)  # port defaults to the device name
     assert c.vjoy.axes == {"x": cc(19), "rz": ("Pedals", "cc", 23)}
     assert c.vjoy.buttons == {1: note(1), 12: cc(64), 2: ("left", "note", 65)}
-    assert midi_joy.devices(c) == {MIX: Device(MIX, 2), "left": Device("LPProMK3", 1),
+    assert midi_joy.devices(c) == {MIX: Device(MIX, 2), "left": Device("LPProMK3", 1, False),
                                    "Pedals": Device("Pedals", None)}  # without [midi."DEVICE"]: any channel
     assert midi_joy.summary(c, [MIX, "left"]) == "x=cc:19 btn1=note:1 btn12=cc:64 btn2=note:65"
     # devices sharing a port open it once, matched by the port's real name
@@ -137,6 +137,7 @@ def test_load_config() -> None:
     ax, bt = "[vjoy.axes.M]\n", "[vjoy.buttons.M]\n"
     _rejects(ax + "foo = 1\n", ax + "z = 128\n", ax + 'z = "62"\n', "[midi.M]\nchannel = 17\n",
              "[midi.M]\nchannel = true\n",  # true/false isn't an integer
+             "[midi.M]\nleds = 0\n", "[midi.M]\nport = 1\n",
              '[midi]\nport = "MIDI Mix"\n',  # old syntax, devices are tables
              "[vjoy.axes]\nz = 62\n", "[vjoy.buttons]\n1 = { note = 1 }\n",  # no device
              ax + "z = 1\n[vjoy.axes.N]\nZ = 2\n",  # one axis from two devices
@@ -645,14 +646,16 @@ def test_dcsbios_hold_switch_off_at_bottom() -> None:
 def test_dcsbios_switches_per_device() -> None:
     mix, pedals, sock = _FakeLeds(), _FakeLeds(), _FakeSock()
     d = DcsSwitches({"LASER_ARM_SW": DcsSwitch(note(18), 1, 0x4428, 0x8, 3, "LASER", ()),
-                     "AP_PITCH_SW": DcsSwitch(("Pedals", "note", 18), 2, 0x4400, 0x300, 8, "PITCH", ())},
+                     "AP_PITCH_SW": DcsSwitch(("Pedals", "note", 18), 2, 0x4400, 0x300, 8, "PITCH", ()),
+                     "RF_SW": DcsSwitch(("Dark", "note", 18), 2, 0x4402, 0x300, 8, "RF", ())},  # leds = false
                     {MIX: (cast(mido.ports.BaseOutput, mix), 0), "Pedals": (cast(mido.ports.BaseOutput, pedals), 3)},
                     cast(socket.socket, _FakeExport()), 0.5)
     d.sock.close()
     d.sock = cast(socket.socket, sock)
     d.on_midi(MidiEvent(("Pedals", "note", 18), 127, True))  # same note as LASER_ARM_SW, other device
+    d.on_midi(MidiEvent(("Dark", "note", 18), 127, True))
     d.tick(0.001)
-    assert sock.sent == [b"AP_PITCH_SW 2\n"]
+    assert sock.sent == [b"AP_PITCH_SW 2\n", b"RF_SW 2\n"]  # a device without LEDs still drives its switches
     assert (mix.sent, mix.channel, pedals.sent, pedals.channel) == ([(18, 0)], 0, [(18, 0)], 3)  # LED per device
     d.close()
 

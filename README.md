@@ -58,6 +58,7 @@ channel = 1
 [midi.mfd_right]  # same port, other channel (e.g. Launchpad custom modes)
 port = "LPProMK3"
 channel = 2
+leds = false      # no switch LED messages, the controller keeps its own colors; omit = true
 ```
 
 `DEVICE` is a substring of the port name (see `--list`), or a name with its own `port`; quote it if it has spaces or dots. Every mapping table below ends in one: `[vjoy.axes."MIDI Mix"]`, `[dcsbios.F-16C_50.mfd_left]`. Every device with a mapping or a `[midi.DEVICE]` table opens at start and must be plugged in; devices on one port share it, each gets the messages on its channel. An axis, button or DCS-BIOS control takes one device.
@@ -111,7 +112,7 @@ MASTER_ARM_SW = { note = 13, hold = true, off = 0 }
 ANTI_SKID_SW = { note = 22, dark = 2 }
 ```
 
-A note switch's LED goes to the device the note comes from, on its `channel` (1 without one).
+A note switch's LED goes to the device the note comes from, on its `channel` (1 without one); none with `leds = false`.
 
 Hold switches move one position at a time like the real switch, so up -> down passes the middle.
 

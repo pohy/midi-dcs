@@ -24,6 +24,7 @@ class Device(NamedTuple):
     """What a device name in the mapping tables listens to; several devices can share a port on other channels."""
     port: str  # port name or part of it, default: the device name
     channel: int | None  # 1-16, None = any
+    leds: bool = True  # False: no switch LED messages, the controller keeps its own colors
 
 
 @dataclass(frozen=True)
@@ -44,7 +45,8 @@ def parse(cfg: Table) -> MidiConfig:
         where = f"[midi.{toml(device)}]"
         channel = get(typed(table, dict, where), "channel", int, None, where)
         devices[device] = Device(get(table, "port", str, device, where),
-                                 None if channel is None else in_range(channel, 1, 16, f"{where} channel"))
+                                 None if channel is None else in_range(channel, 1, 16, f"{where} channel"),
+                                 get(table, "leds", bool, True, where))
     return MidiConfig(devices, hold_s)
 
 

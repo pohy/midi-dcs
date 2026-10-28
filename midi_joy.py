@@ -94,7 +94,7 @@ def open_outputs(conf: Config) -> list[Output]:
         # LEDs on the device the note comes from, on its channel; devices on one port share its output
         used = {s.src[0] for s in conf.dcsbios.switches.values()}
         leds: dict[str, tuple[mido.ports.BaseOutput, int]] = {}
-        for port, devs in by_port({d: dev for d, dev in devices(conf).items() if d in used},
+        for port, devs in by_port({d: dev for d, dev in devices(conf).items() if d in used and dev.leds},
                                   mido.get_output_names()).items():
             out = mido.open_output(port)
             leds |= {d: (out, (dev.channel or 1) - 1) for d, dev in devs.items()}
@@ -108,11 +108,11 @@ def dispatch(devs: dict[str, midi.Device], outputs: list[Output]) -> Callable[[m
     """MIDI callback of one port: drop unmappable messages, hand the rest to every output as coming from each
     device whose channel it's on."""
     def callback(msg: mido.Message) -> None:
-        for device, (_, channel) in devs.items():
+        for device, dev in devs.items():
             ev = midi.midi_event(msg, device)
             if ev is None:
                 return
-            if channel is not None and msg.channel != channel - 1:
+            if dev.channel is not None and msg.channel != dev.channel - 1:
                 continue
             for out in outputs:
                 out.on_midi(ev)
@@ -122,8 +122,8 @@ def dispatch(devs: dict[str, midi.Device], outputs: list[Output]) -> Callable[[m
 def monitor(devs: dict[str, midi.Device]) -> Callable[[mido.Message], None]:
     """--monitor callback of one port: every message in config syntax, after the devices whose channel it's on."""
     def callback(msg: mido.Message) -> None:
-        names = [midi.toml(d) for d, (_, ch) in devs.items()
-                 if midi.midi_event(msg, d) is not None and (ch is None or msg.channel == ch - 1)]
+        names = [midi.toml(d) for d, dev in devs.items()
+                 if midi.midi_event(msg, d) is not None and (dev.channel is None or msg.channel == dev.channel - 1)]
         print(" ".join([*names, midi.describe(msg)]))
     return callback
 

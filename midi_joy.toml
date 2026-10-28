@@ -12,10 +12,17 @@ hold_s = 0.5
 [midi.lpp_mfd_left]
 port = "LPProMK3"
 channel = 1
+leds = false
 
 [midi.lpp_mfd_right]
 port = "LPProMK3"
 channel = 2
+leds = false
+
+[midi.lpp_ufc]
+port = "LPProMK3"
+channel = 3
+leds = false
 
 [vjoy]
 device = 1
@@ -117,6 +124,34 @@ MFD_R_GAIN_SW = { up = 36, down = 37 }
 MFD_R_BRT_SW = { up = 38, down = 39 }
 MFD_R_CON_SW = { up = 68, down = 69 }
 MFD_R_SYM_SW = { up = 70, down = 71 }
+
+[dcsbios.F-16C_50.lpp_ufc]
+ICP_COM1_BTN = { note = 56 }
+ICP_COM2_BTN = { note = 57 }
+ICP_IFF_BTN = { note = 58 }
+ICP_LIST_BTN = { note = 59 }
+ICP_AA_MODE_BTN = { note = 88 }
+ICP_AG_MODE_BTN = { note = 89 }
+
+# Numpad
+ICP_BTN_1 = { note = 52 }
+ICP_BTN_2 = { note = 53 }
+ICP_BTN_3 = { note = 54 }
+ICP_BTN_4 = { note = 48 }
+ICP_BTN_5 = { note = 49 }
+ICP_BTN_6 = { note = 50 }
+ICP_BTN_7 = { note = 44 }
+ICP_BTN_8 = { note = 45 }
+ICP_BTN_9 = { note = 46 }
+
+ICP_RCL_BTN = { note = 55 }
+ICP_ENTR_BTN = { note = 51 }
+ICP_BTN_0 = { note = 47 }
+
+ICP_DED_SW = { up = 40, down = 36 }
+ICP_DATA_UP_DN_SW = { up = 42, down = 38}
+ICP_DATA_RTN_SEQ_SW = { up = 39, down = 37 }
+
 
 [sound]
 knob = "resources/sfx-knob"
